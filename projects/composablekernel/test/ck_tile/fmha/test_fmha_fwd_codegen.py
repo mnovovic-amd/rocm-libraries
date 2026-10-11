@@ -1879,9 +1879,9 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
             self.assertEqual(dispatch.run(group=group, hdim_q=128), [fallback])
 
     def test_d128_qr_tdm_tiles_and_lds_bodies(self):
-        # d128 fp16/bf16 qr_tdm: bm0=16, bm0=128 and the _o2 bm0=64 tile run the
-        # double K/V buffer body, the plain bm0=64 tile the K ping/pong body; at
-        # bm0=64 only the _o2 tile carries causal kernels. Only the K ping/pong
+        # d128 fp16/bf16 qr_tdm: bm0=128 and the _o2 bm0=64 tile run the double
+        # K/V buffer body, the bm0=16 and plain bm0=64 tiles the K ping/pong body;
+        # at bm0=64 only the _o2 tile carries causal kernels. Only the K ping/pong
         # kernels serve any seqlen_k from their unpadded instance.
         _, kernels = get_fwd_blobs(
             ["gfx1250"], _SUPPORTED_DISPATCH_FILTER, 600, [128, 192], "simplified"
@@ -1895,8 +1895,10 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
             tile, pipeline = kernel.F_tile, kernel.F_pipeline
             double = pipeline.F_use_double_kv_lds_buffer == "t"
             self.assertEqual(ping_pong, not double, kernel.name)
-            if tile.F_bm0 in (16, 128):
+            if tile.F_bm0 == 128:
                 self.assertTrue(double, kernel.name)
+            elif tile.F_bm0 == 16:
+                self.assertFalse(double, kernel.name)
             else:
                 self.assertEqual(tile.F_bm0, 64, kernel.name)
                 o2 = tile.F_occupancy != -1
@@ -1904,7 +1906,7 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
                 self.assertEqual(pipeline.F_mask == "causal", o2, kernel.name)
             seen.add((tile.F_bm0, tile.F_occupancy, double))
         self.assertEqual(
-            seen, {(16, -1, True), (128, -1, True), (64, 2, True), (64, -1, False)}
+            seen, {(16, -1, False), (128, -1, True), (64, 2, True), (64, -1, False)}
         )
 
     def test_d128_k_ping_pong_dispatch(self):
@@ -1949,6 +1951,7 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
         # The unpadded K ping/pong kernel serves any seqlen_k, but an elementwise
         # bias still needs a tile multiple.
         self.assertEqual(run(**square), [qr_tdm(64, False)])
+        self.assertEqual(run(seqlen_q=8, seqlen_k=532), [qr_tdm(16, False)])
         self.assertEqual(
             run(**square, bias=1), [qr_tdm(64, False, skpad="t", bias="bias")]
         )

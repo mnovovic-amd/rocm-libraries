@@ -1728,8 +1728,8 @@ class KernelComponentFactoryGfx125(CompatibilityRuleFactory):
         def check_qr_tdm_kv_lds_buffering(
             problem_ctx: ProblemContext, kernel_ctx: KernelContext
         ) -> bool:
-            # d128 fp16/bf16 qr_tdm: the bm0=16, bm0=128 and _o2 tiles take the double
-            # K/V buffer body, the others the K ping/pong body; at bm0=64 only the _o2
+            # d128 fp16/bf16 qr_tdm: the bm0=128 and _o2 tiles take the double K/V
+            # buffer body, the others the K ping/pong body; at bm0=64 only the _o2
             # tile carries causal kernels. The _o2 tile is qr_tdm's alone.
             if problem_ctx.dtype not in cls._DT_FP16_BF16 or (
                 problem_ctx.hdim,
@@ -1741,7 +1741,7 @@ class KernelComponentFactoryGfx125(CompatibilityRuleFactory):
             if pipeline.tag != "qr_tdm":
                 return not o2
             if (pipeline.F_use_double_kv_lds_buffer == "t") != (
-                tile.F_bm0 in (16, 128) or o2
+                tile.F_bm0 == 128 or o2
             ):
                 return False
             return tile.F_bm0 != 64 or (pipeline.F_mask == "causal") == o2

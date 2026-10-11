@@ -479,8 +479,12 @@ TEST_P(QrTdmShortQuery, DataTypeConfig)
         ASSERT_EQ(result, fwd_result::success);
         EXPECT_NE(selected_kernel.find("_qr_tdm_"), std::string::npos) << selected_kernel;
         // Group mode dispatches on the packed total q length (see QrTdmNewHeadDim).
+        // The tile runs on the K ping/pong body (no "_kvlp_" in the kernel name).
         if(mode == mode_enum::batch)
+        {
             EXPECT_NE(selected_kernel.find("_b16x64"), std::string::npos) << selected_kernel;
+            EXPECT_NE(selected_kernel.find("_nkvlp_"), std::string::npos) << selected_kernel;
+        }
     }
 }
 
