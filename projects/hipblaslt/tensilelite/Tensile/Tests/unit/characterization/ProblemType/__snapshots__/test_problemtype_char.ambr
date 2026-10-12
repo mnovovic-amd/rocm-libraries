@@ -94,6 +94,8 @@
     'OperationType': 'GEMM',
     'OutputAmaxD': False,
     'ScaleBlockSizeA': 0,
+    'ScaleBlockSizesA': list([
+    ]),
     'ScaleZeroPointA': False,
     'SetConstStrideA': list([
     ]),
@@ -223,6 +225,8 @@
     'OperationType': 'GEMM',
     'OutputAmaxD': False,
     'ScaleBlockSizeA': 0,
+    'ScaleBlockSizesA': list([
+    ]),
     'ScaleZeroPointA': False,
     'SetConstStrideA': list([
     ]),
@@ -269,7 +273,7 @@
     'getitem_datatype': 'Float',
     'is_mapping_iter_sorted': True,
     'keys_is_list': True,
-    'len': 93,
+    'len': 94,
   })
 # ---
 # name: test_no_data_type_raises
@@ -366,6 +370,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -497,6 +503,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -628,6 +636,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -759,6 +769,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -890,6 +902,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -1022,6 +1036,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -1153,6 +1169,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -1284,6 +1302,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -1415,6 +1435,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -1546,6 +1568,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -1681,6 +1705,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -1812,6 +1838,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -1944,6 +1972,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -2076,6 +2106,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -2208,6 +2240,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -2340,6 +2374,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -2473,6 +2509,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -2604,6 +2642,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -2735,6 +2775,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -2866,6 +2908,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -2997,6 +3041,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -3128,6 +3174,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -3259,6 +3307,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -3391,6 +3441,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -3522,6 +3574,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -3653,6 +3707,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -3784,6 +3840,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -3915,6 +3973,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -4046,6 +4106,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -4179,6 +4241,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -4310,6 +4374,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -4441,6 +4507,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -4584,6 +4652,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -4717,6 +4787,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': True,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -4848,6 +4920,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -4979,6 +5053,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -5110,6 +5186,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -5241,6 +5319,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -5372,6 +5452,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -5505,6 +5587,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -5639,6 +5723,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -5773,6 +5859,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -5907,6 +5995,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -6039,6 +6129,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -6170,6 +6262,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -6301,6 +6395,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -6432,6 +6528,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),
@@ -6563,6 +6661,8 @@
       'OperationType': 'GEMM',
       'OutputAmaxD': False,
       'ScaleBlockSizeA': 0,
+      'ScaleBlockSizesA': list([
+      ]),
       'ScaleZeroPointA': False,
       'SetConstStrideA': list([
       ]),

@@ -451,6 +451,7 @@ class _LazyProblemType:
     useScaleAlphaVec = False
     sparse = 0
     metadataLayout = 0
+    scaleBlockSizeA = 0
     f32XdlMathOp = _FakeType("f32", single=True)
     supportDeviceUserArguments = False
 
@@ -495,6 +496,10 @@ class _LazyProblemType2:
     useScaleAlphaVec = True
     sparse = 2                               # -> _SPB
     metadataLayout = 1
+    scaleBlockSizeA = 32                     # -> _SABB...
+    scaleBlockSizesA = [32, 64, 128]         # runtime-group -> G32x64x128
+    scaleZeroPointA = True                   # -> _ZP1
+    int4EncodingA = "Signed"
     f32XdlMathOp = _FakeType("xf32", single=False)
     supportDeviceUserArguments = True
 

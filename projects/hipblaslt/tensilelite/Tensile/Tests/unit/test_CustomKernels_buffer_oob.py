@@ -50,6 +50,34 @@ NO_BUFFER_OOB_KERNELS = {
     "NUM_KSPLIT_1": "Triton, global_store only",
     "c_ck_gemm_basic_hip_amdgcn_amd_amdhsa_gfx942": "Composable Kernel",
     "wave_bf16_gemm_256x256x64": "Wave, global_store only",
+    # The W4A16 decode kernels are compiled from HIP, so they address D with a
+    # 64-bit global_store rather than a buffer descriptor: there is no
+    # num_records field to carry BufferOOB. Each one masks exec against the free
+    # size at entry (v_cmpx_gt_u32 against the kernarg at 0x10, then
+    # s_cbranch_execz to the epilogue) and keeps its single store inside that
+    # mask, so out-of-range lanes are predicated off rather than bounded.
+    "RuntimeGroup_Decode_W2_U1_A4_T512_NativePerm_LinearK_Symmetric_UnsignedBias8_gfx1151":
+        "W4A16 decode, global_store only",
+    "RuntimeGroup_Decode_W4_NativePerm_LinearK_Symmetric_N4_UnsignedBias8_gfx1151":
+        "W4A16 decode, global_store only",
+    "RuntimeGroup_Decode_W4_NativePerm_LinearK_Symmetric_UnsignedBias8_gfx1151":
+        "W4A16 decode, global_store only",
+    "RuntimeGroup_Decode_W4_NativePerm_LinearK_UnsignedBias8_gfx1151":
+        "W4A16 decode, global_store only",
+    "RuntimeGroup_Decode_W4_NativePerm_Symmetric_N4_UnsignedBias8_gfx1151":
+        "W4A16 decode, global_store only",
+    "RuntimeGroup_Decode_W4_NativePerm_Symmetric_UnsignedBias8_gfx1151":
+        "W4A16 decode, global_store only",
+    "RuntimeGroup_Decode_W4_NativePerm_UnsignedBias8_gfx1151":
+        "W4A16 decode, global_store only",
+    "RuntimeGroup_Decode_W4_U1_A4_Symmetric_N4_UnsignedBias8_gfx1151":
+        "W4A16 decode, global_store only",
+    "RuntimeGroup_Decode_W4_U1_A4_Symmetric_UnsignedBias8_gfx1151":
+        "W4A16 decode, global_store only",
+    "RuntimeGroup_Decode_W4_U1_A4_UnsignedBias8_gfx1151":
+        "W4A16 decode, global_store only",
+    "RuntimeGroup_Decode_W4_UnsignedBias8_gfx1151":
+        "W4A16 decode, global_store only",
 }
 
 _SET_BUFFER_OOB = re.compile(r"^\s*\.set\s+BufferOOB\s*,\s*([^\s/]+)", re.M)

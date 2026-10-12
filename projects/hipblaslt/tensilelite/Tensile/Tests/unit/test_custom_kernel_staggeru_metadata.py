@@ -490,9 +490,11 @@ STAGGERS_DESPITE_DECLARING_ZERO = frozenset(
         "RuntimeGroup_Prefill_I4H_HHS_SABBGU8_MT64x128x64_W4_gfx1151",
         "RuntimeGroup_Prefill_I4H_HHS_SABBGU8_MT64x32x64_W4_gfx1151",
         "RuntimeGroup_Prefill_I4H_HHS_SABBGU8_MT64x96x64_W4_gfx1151",
-        "RuntimeGroup",
+        "RuntimeGroup_Cijk_Alik_Bljk_I4B_BBS_BH_SABBGU8_UserArgs_MT64x160x64_MI16x16x1_gfx1151",
+        "RuntimeGroup_Cijk_Alik_Bljk_I4B_BBS_BH_SABBGZP_UserArgs_MT64x160x64_MI16x16x1_gfx1151",
         "RuntimeGroup_Cijk_Alik_Bljk_I4B_BBS_BH_SABBGZPU8_UserArgs_MT64x160x64_MI16x16x1_gfx1151",
         "RuntimeGroup_Cijk_Alik_Bljk_I4B_BBS_BH_SABBG_UserArgs_MT64x160x64_MI16x16x1_gfx1151",
+        "RuntimeGroup_Cijk_Alik_Bljk_I4H_HHS_BH_SABBGZP_UserArgs_MT64x160x64_MI16x16x1_gfx1151",
         "RuntimeGroup_Cijk_Alik_Bljk_I4H_HHS_BH_SABBGZPU8_UserArgs_MT128x256x64_MI16x16x1_gfx1151",
         "RuntimeGroup_Cijk_Alik_Bljk_I4H_HHS_BH_SABBGU8_UserArgs_MT128x256x64_MI16x16x1_gfx1151",
         "RuntimeGroup_Cijk_Alik_Bljk_I4H_HHS_BH_SABBGZPU8_UserArgs_MT64x160x64_MI16x16x1_gfx1151",
@@ -511,7 +513,7 @@ STAGGERS_DESPITE_DECLARING_ZERO = frozenset(
 # adding or retuning a custom kernel forces the reconciliation to be redone
 # rather than shifting the ground truth underneath the gate.
 EXPECTED_CENSUS = {
-    "kernels": 155,
+    "kernels": 157,
     # Explicit non-zero StaggerU: 24 at 8 and 4 at 4.
     "declaredNonZero": 28,
     # Of those, the ones with no packed unpack at all: StaggerU is a literal
@@ -522,7 +524,7 @@ EXPECTED_CENSUS = {
     # Includes the six kernels built outside Tensile (aiter, ck, rocroller,
     # triton, wave), which declare StaggerU: 0 because they do not implement
     # the in-loop wrap at all; the disassembly confirms none of them staggers.
-    "declaredZero": 95,
+    "declaredZero": 97,
     # No StaggerU key at all, so they inherit the default of 32.
     "undeclared": 32,
 }

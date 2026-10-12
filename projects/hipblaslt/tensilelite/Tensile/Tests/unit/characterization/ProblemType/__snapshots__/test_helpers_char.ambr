@@ -41,6 +41,7 @@
     'OperationType',
     'OutputAmaxD',
     'ScaleBlockSizeA',
+    'ScaleBlockSizesA',
     'ScaleZeroPointA',
     'SetConstStrideA',
     'SetConstStrideB',
@@ -189,6 +190,9 @@
     ]),
     'ScaleBlockSizeA': list([
       'int',
+    ]),
+    'ScaleBlockSizesA': list([
+      'list',
     ]),
     'ScaleZeroPointA': list([
       'bool',
