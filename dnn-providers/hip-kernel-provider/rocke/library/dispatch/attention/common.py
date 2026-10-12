@@ -198,7 +198,7 @@ class AttentionRequest(OperatorRequest):
                 active.add("causal")
                 if not top_left and int(self.seqlen_q) != int(self.seqlen_k):
                     active.add("causal_bottom_right")
-            elif int(self.sliding_window) > 0 or right > 0:
+            else:  # right != 0: full attention, lookahead, or a non-causal window
                 active.add("band")
         else:
             if mask_type is not None and mask_type != AttentionMaskType.NO_MASK:
@@ -426,7 +426,9 @@ def _attention_band(req: AttentionRequest) -> Tuple[bool, int]:
         if right != 0:
             raise ValueError(_BAND_GFX950_ONLY_ERROR)
     if right < 0 and window <= 0:
-        return False, -1  # full attention
+        # Full attention. A single query row per sequence sees every key exactly as
+        # the bottom-right causal body does, so decode keeps its causal kernels.
+        return (False, 0) if sq == 1 else (False, -1)
     top_left = alignment == 0 and (sq != sk or _has_no_mask_kernel(req.arch))
     return top_left, right
 

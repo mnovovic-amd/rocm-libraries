@@ -297,6 +297,14 @@ diagonal position `d` iff `d - k < left` (when set) and `k <= d + right`. An
 | `SLIDING_WINDOW` | the same trio, but it must name a bound |
 | `TOP_LEFT_CAUSAL` / `BOTTOM_RIGHT_CAUSAL` | right bound 0, alignment from the kind (a causal window = these + `sliding_window`) |
 
+Full attention at `seqlen_q == 1` (single-token decode) is the same computation as
+bottom-right causal, so it is dispatched to the causal kernels and the decode-only
+candidates (strided-KV, d256 decode) keep serving the default `NO_MASK` request. A
+decode *window* is a different band: `NO_MASK` + `sliding_window` is the top-left
+non-causal window, so a decode caller that wants the last-`W`-keys window passes
+`BOTTOM_RIGHT_CAUSAL` (or `diagonal_alignment=1`). Candidates without band support
+reject any real band with a `cannot serve features ['band']` capability reason.
+
 Kernel variants are distinct bodies and names: `_tl` (top-left), `_rbu` / `_rb<R>`
 (unbounded / R-key right bound, plus `_sw<W>` for a non-causal window); at equal
 length the alignments coincide, so the default body is kept. Window, right bound

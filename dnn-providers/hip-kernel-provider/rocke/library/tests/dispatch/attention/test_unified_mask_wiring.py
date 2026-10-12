@@ -53,7 +53,7 @@ def _req(**kw) -> AttentionRequest:
 # (expected spec_id, request kwargs). The prefill ones are 2D, the decode ones 3D.
 _CASES = {
     "unified_2d": ("unified_2d", dict()),
-    "unified_3d": ("unified_3d", dict(seqlen_q=1, seqlen_k=4096)),
+    "unified_3d": ("unified_3d", dict(seqlen_q=2, seqlen_k=4096)),
     "gfx950_d256": (
         "gfx950_d256",
         dict(
@@ -220,7 +220,10 @@ class TestBandNormalization(unittest.TestCase):
 
     def test_features(self):
         f = lambda **kw: _req(**kw).features()  # noqa: E731
-        self.assertEqual(f(mask_type=NO_MASK), frozenset())
+        self.assertEqual(f(mask_type=NO_MASK), {"band"})
+        self.assertEqual(
+            f(mask_type=NO_MASK, seqlen_q=1), {"causal", "causal_bottom_right"}
+        )
         self.assertEqual(
             f(mask_type=NO_MASK, sliding_window=256), {"band", "sliding_window"}
         )
@@ -239,6 +242,22 @@ class TestBandNormalization(unittest.TestCase):
             {"causal", "causal_bottom_right", "sliding_window"},
         )
         self.assertEqual(f(mask_type=TOP_LEFT), {"causal"})
+
+    def test_strided_decode_serves_only_the_causal_body(self):
+        # The strided-KV decode candidate has no band support: it keeps single-token
+        # full attention (identical to causal) and rejects every real band.
+        from dispatch.attention import strided_decode
+
+        candidate = strided_decode.make_candidate()
+        strided = dict(kv_layout="strided", kv_block_size=64, seqlen_q=1, seqlen_k=65)
+        self.assertTrue(candidate.admits(_req(mask_type=NO_MASK, **strided))[0])
+        for kw in (dict(right_bound=4), dict(sliding_window=8)):
+            with self.subTest(kw=kw):
+                ok, why = candidate.admits(
+                    _req(mask_type=NO_MASK, **dict(strided, **kw))
+                )
+                self.assertFalse(ok)
+                self.assertIn("band", why)
 
 
 class TestBandDistinctIdentity(unittest.TestCase):
@@ -302,8 +321,13 @@ class TestBandDistinctIdentity(unittest.TestCase):
                         tl = dispatch_attention(_req(mask_type=TOP_LEFT, **kw2))
                     except ValueError:
                         continue  # shape leaves this cohort at equal length
-                    self.assertEqual(nm.spec.right_bound, -1)
                     self.assertTrue(br.spec.causal)
+                    if kw2.get("seqlen_q") == 1:
+                        # One query row sees every key, exactly as bottom-right causal
+                        # does, so single-token decode keeps its causal kernel.
+                        self.assertEqual(nm.spec.kernel_name(), br.spec.kernel_name())
+                        continue
+                    self.assertEqual(nm.spec.right_bound, -1)
                     self.assertIn("rbu", nm.spec.kernel_name().split("_"))
                     self.assertNotEqual(nm.spec.kernel_name(), br.spec.kernel_name())
                     self.assertNotEqual(nm.spec.kernel_name(), tl.spec.kernel_name())
@@ -346,7 +370,7 @@ class TestBandDistinctIdentity(unittest.TestCase):
     def test_3d_cache_key_separates_masks(self):
         with _GfxArch("gfx950"):
             keys = {
-                au._tiled_3d_cache_key(_problem(_req(seqlen_q=1, **kw)))
+                au._tiled_3d_cache_key(_problem(_req(seqlen_q=2, **kw)))
                 for kw in (
                     dict(mask_type=BOTTOM_RIGHT),
                     dict(mask_type=TOP_LEFT),
@@ -440,7 +464,7 @@ class TestBandLowering(unittest.TestCase):
         ]
         with _GfxArch("gfx950"):
             p2 = [_problem(_req(**b)) for b in bands]
-            p3 = [_problem(_req(seqlen_q=1, **b)) for b in bands]
+            p3 = [_problem(_req(seqlen_q=2, **b)) for b in bands]
             s2 = [bld._spec_gfx950_generic(p) for p in p2]
             s3 = [bld._spec_generic_3d(p) for p in p3]
         builders = [
@@ -512,7 +536,7 @@ class TestMaskGates(unittest.TestCase):
                 )
                 self.assertTrue(
                     au.supports_native_unified_attention_3d_tiled(
-                        _problem(_req(seqlen_q=1, **kw)), arch="gfx950"
+                        _problem(_req(seqlen_q=2, **kw)), arch="gfx950"
                     )[0]
                 )
 
