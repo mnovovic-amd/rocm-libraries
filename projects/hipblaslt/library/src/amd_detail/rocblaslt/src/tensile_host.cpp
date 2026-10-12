@@ -518,7 +518,8 @@ namespace
             return rocisa::DataType::BFloat6;
         case HIP_R_4F_E2M1:
             return rocisa::DataType::Float4;
-        // w4a16 weights: signed int4, two elements per byte.
+        // w4a16 weights: int4, two elements per byte. The nibble domain is signed
+        // or unsigned per HIPBLASLT_MATMUL_DESC_A_INT4_ENCODING_EXT, not per type.
         case HIP_R_4I:
             return rocisa::DataType::Int4;
         default:
@@ -1149,25 +1150,44 @@ namespace
     }
 
     /// hipblaslt-bench --scaleA mode, matching the client's scaleInt2Enum:
-    /// Preserve MX formats and report 1006..1011 for w4a16 group scales.
+    /// Preserve MX formats and report the w4a16 group-scale modes.
     inline int benchScaleModeA(const TensileLite::ContractionProblemGemm& problem)
     {
         if(!isW4A16(problem))
             return benchScaleAFormat(problem);
         // The numbers are the public
-        // HIPBLASLT_MATMUL_MATRIX_SCALE_VEC{32,64,128}[_ZP]_EXT enumerators.
-        const bool zp = problem.scaleZeroPointA();
-        switch(problem.scaleBlockSizeA())
+        // HIPBLASLT_MATMUL_MATRIX_SCALE_VEC{32,64,128}[_ZP]_{16BF,16F}_EXT
+        // enumerators, which run 1006..1017 as [type][zero-point][group size].
+        // The mode names the scale type, so reporting the bf16 block for an fp16
+        // scale would log a line the library then rejects on replay.
+        int base;
+        switch(problem.tensor(TensileLite::ContractionProblemGemm::TENSOR::SCALEA).dataType())
         {
-        case 32:
-            return zp ? 1009 : 1006;
-        case 64:
-            return zp ? 1010 : 1007;
-        case 128:
-            return zp ? 1011 : 1008;
+        case rocisa::DataType::BFloat16:
+            base = 1006;
+            break;
+        case rocisa::DataType::Half:
+            base = 1012;
+            break;
         default:
             return 0;
         }
+        int group;
+        switch(problem.scaleBlockSizeA())
+        {
+        case 32:
+            group = 0;
+            break;
+        case 64:
+            group = 1;
+            break;
+        case 128:
+            group = 2;
+            break;
+        default:
+            return 0;
+        }
+        return base + group + (problem.scaleZeroPointA() ? 3 : 0);
     }
 
     /// Same for B, which carries no scale on the w4a16 path.

@@ -227,6 +227,13 @@ namespace
     {
         std::vector<BScaleCase> result;
         for(auto dtype : {HIP_R_16F, HIP_R_16BF})
+        {
+            // The mode names the scale type and the library requires it to equal
+            // B's, so the base enumerator has to follow dtype. Within each block
+            // the modes run [zero-point][group size], hence the arithmetic.
+            const int base = dtype == HIP_R_16BF
+                                 ? HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_16BF_EXT
+                                 : HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_16F_EXT;
             for(auto encoding : {HIPBLASLT_INT4_ENCODING_SIGNED_EXT,
                                  HIPBLASLT_INT4_ENCODING_UNSIGNED_BIAS8_EXT})
                 for(bool zp : {false, true})
@@ -234,8 +241,9 @@ namespace
                     for(int group = 0; group < 3; ++group)
                         for(int64_t n : {1, 16})
                             result.emplace_back(dtype, encoding,
-                                static_cast<hipblasLtMatmulMatrixScale_t>(1006 + group + (zp ? 3 : 0)), n);
+                                static_cast<hipblasLtMatmulMatrixScale_t>(base + group + (zp ? 3 : 0)), n);
                 }
+        }
         return result;
     }
 }

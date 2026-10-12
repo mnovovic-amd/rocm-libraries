@@ -362,29 +362,13 @@ namespace hipblaslt_ext
 
     namespace
     {
+        /// The w4a16 group-scale modes, which hipblasLtMatmulMatrixScale_t documents
+        /// as matrix-A only. Returns ScalingFormat::None for every other mode.
         RocblasltContractionProblem::ScalingFormat
-            mapMatrixScaleToFormat(hipblasLtMatmulMatrixScale_t s, const char* which)
+            mapW4A16MatrixScaleToFormat(hipblasLtMatmulMatrixScale_t s)
         {
             switch(s)
             {
-            case HIPBLASLT_MATMUL_MATRIX_SCALE_SCALAR_32F:
-                return RocblasltContractionProblem::ScalingFormat::Scalar;
-            case HIPBLASLT_MATMUL_MATRIX_SCALE_OUTER_VEC_32F:
-                return RocblasltContractionProblem::ScalingFormat::Vector;
-            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0:
-                return RocblasltContractionProblem::ScalingFormat::Block_32_UE8M0;
-            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE8M0_EXT:
-                return RocblasltContractionProblem::ScalingFormat::Block_16_UE8M0;
-            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE4M3_EXT:
-                return RocblasltContractionProblem::ScalingFormat::Block_32_UE4M3;
-            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3:
-                return RocblasltContractionProblem::ScalingFormat::Block_16_UE4M3;
-            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE5M3_EXT:
-                return RocblasltContractionProblem::ScalingFormat::Block_32_UE5M3;
-            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE5M3_EXT:
-                return RocblasltContractionProblem::ScalingFormat::Block_16_UE5M3;
-            case HIPBLASLT_MATMUL_MATRIX_SCALE_BLK32_UE8M0_32_8_EXT:
-                return RocblasltContractionProblem::ScalingFormat::Block_32_UE8M0_32_8_EXT;
             case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_16BF_EXT:
                 return RocblasltContractionProblem::ScalingFormat::Block_32_BF16;
             case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC64_16BF_EXT:
@@ -409,6 +393,42 @@ namespace hipblaslt_ext
                 return RocblasltContractionProblem::ScalingFormat::Block_64_F16_ZP;
             case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC128_16F_ZP_EXT:
                 return RocblasltContractionProblem::ScalingFormat::Block_128_F16_ZP;
+            default:
+                return RocblasltContractionProblem::ScalingFormat::None;
+            }
+        }
+
+        RocblasltContractionProblem::ScalingFormat
+            mapMatrixScaleToFormat(hipblasLtMatmulMatrixScale_t s, const char* which, bool isA)
+        {
+            // w4a16 group scales apply to matrix A only. The C API rejects them on
+            // ROCBLASLT_MATMUL_DESC_B_SCALE_MODE; without the isA guard the ext API
+            // would accept one for B and then silently drop the scale, since
+            // setTensileScaleAB keys the w4a16 path off scaleAType alone. Falling
+            // through to the switch below reports it as an unsupported B mode.
+            if(const auto w4a16 = mapW4A16MatrixScaleToFormat(s);
+               isA && w4a16 != RocblasltContractionProblem::ScalingFormat::None)
+                return w4a16;
+            switch(s)
+            {
+            case HIPBLASLT_MATMUL_MATRIX_SCALE_SCALAR_32F:
+                return RocblasltContractionProblem::ScalingFormat::Scalar;
+            case HIPBLASLT_MATMUL_MATRIX_SCALE_OUTER_VEC_32F:
+                return RocblasltContractionProblem::ScalingFormat::Vector;
+            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0:
+                return RocblasltContractionProblem::ScalingFormat::Block_32_UE8M0;
+            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE8M0_EXT:
+                return RocblasltContractionProblem::ScalingFormat::Block_16_UE8M0;
+            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE4M3_EXT:
+                return RocblasltContractionProblem::ScalingFormat::Block_32_UE4M3;
+            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3:
+                return RocblasltContractionProblem::ScalingFormat::Block_16_UE4M3;
+            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE5M3_EXT:
+                return RocblasltContractionProblem::ScalingFormat::Block_32_UE5M3;
+            case HIPBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE5M3_EXT:
+                return RocblasltContractionProblem::ScalingFormat::Block_16_UE5M3;
+            case HIPBLASLT_MATMUL_MATRIX_SCALE_BLK32_UE8M0_32_8_EXT:
+                return RocblasltContractionProblem::ScalingFormat::Block_32_UE8M0_32_8_EXT;
             default:
                 std::cerr << "Unsupported scaling type for " << which
                           << " matrix: " << static_cast<int>(s) << std::endl;
@@ -475,12 +495,12 @@ namespace hipblaslt_ext
 
     void GemmEpilogue::setScalingAType(hipblasLtMatmulMatrixScale_t scaling_a_type)
     {
-        pimpl->scaling_a_type = mapMatrixScaleToFormat(scaling_a_type, "A");
+        pimpl->scaling_a_type = mapMatrixScaleToFormat(scaling_a_type, "A", /*isA=*/true);
     }
 
     void GemmEpilogue::setScalingBType(hipblasLtMatmulMatrixScale_t scaling_b_type)
     {
-        pimpl->scaling_b_type = mapMatrixScaleToFormat(scaling_b_type, "B");
+        pimpl->scaling_b_type = mapMatrixScaleToFormat(scaling_b_type, "B", /*isA=*/false);
     }
 
     void GemmEpilogue::setAct0(float act0)

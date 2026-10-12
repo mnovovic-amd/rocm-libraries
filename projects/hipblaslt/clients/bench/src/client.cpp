@@ -1239,6 +1239,14 @@ try
                                         + "; expected one of " + c_int4_encoding_names);
         arg.int4_encoding = static_cast<int32_t>(encoding);
 
+        // The w4a16 modes are A-only. Without this the value reaches
+        // hipblasLtMatmulDescSetAttribute(B_SCALE_MODE) and surfaces as a bare
+        // CHECK_HIPBLASLT_ERROR status instead of a diagnosable message.
+        if(isW4A16Scaling(arg.scaleB))
+            throw std::invalid_argument(
+                "--scaleB does not accept the w4a16 group-scale modes 1006..1017; got "s
+                + std::to_string(static_cast<int>(arg.scaleB)));
+
         const bool int4A = (arg.a_type == HIP_R_4I);
         if(int4A != isW4A16Scaling(arg.scaleA))
             throw std::invalid_argument(

@@ -152,7 +152,8 @@ constexpr const char* hip_datatype_to_string(hipDataType type)
     case static_cast<hipDataType>(HIP_R_8F_E5M3_EXT):
 #pragma GCC diagnostic pop
         return "e5m3_r";
-    // w4a16 weights: signed int4, two elements per byte.
+    // w4a16 weights: int4, two elements per byte. The nibble domain is signed or
+    // unsigned per HIPBLASLT_MATMUL_DESC_A_INT4_ENCODING_EXT, not per type.
     case HIP_R_4I:
         return "i4_r";
     default:
