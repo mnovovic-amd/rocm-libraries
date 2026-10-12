@@ -134,10 +134,14 @@ def main() -> int:
         ref_args += ["--shim", args.ref_shim]
 
     def run_gate(label: str, dashboard: str, extra: list[str]) -> int:
-        print(f"\n== differential gate: {label} ==")
+        print(f"\n== differential gate: {label} ==", flush=True)
+        # The full gate is long-running. Inherit the parent's streams and make
+        # the child unbuffered so each completed family is visible instead
+        # of holding the entire dashboard until the process exits.
         proc = subprocess.run(
             [
                 sys.executable,
+                "-u",
                 str(RUN_DIFF),
                 "--archive",
                 str(archive),
@@ -146,13 +150,8 @@ def main() -> int:
                 *only_args,
                 *ref_args,
                 *extra,
-            ],
-            capture_output=True,
-            text=True,
+            ]
         )
-        print(proc.stdout)
-        if proc.stderr:
-            print(proc.stderr, file=sys.stderr)
         # run_diff owns the pass/fail rule (its GATE_PASS/GATE_FAIL partition,
         # which fails closed on any status it does not recognize). Trust the
         # exit code -- a second rule here could only disagree with it.
