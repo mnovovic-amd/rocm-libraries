@@ -107,6 +107,116 @@ class TestMaskNumeric:
         assert err > 1e-2, f"default-mask kernel unexpectedly matches ({err})"
 
 
+class TestDispatchedMixedCohort:
+    """request -> dispatch -> launch on a cohort whose batch maxima are EQUAL.
+
+    ``seqlen_q`` / ``seqlen_k`` of the request are the batch maxima for the paged
+    unified kernels, which take ``context_len`` per sequence from ``cu_seqlens_q`` /
+    ``seq_lens`` at runtime. The ``mixed`` cohort below has maxima 700 / 700 yet holds
+    (700, 200) and (200, 700) sequences, so folding top-left into bottom-right because
+    the maxima match silently gives those sequences the wrong diagonal. The other
+    tests here build ``UnifiedAttentionProblem`` directly and never go through the
+    request normalization, which is how that shortcut went unnoticed.
+    """
+
+    _MIXED = [(512, 512), (700, 200), (200, 700), (64, 64)]
+
+    @requires_gfx950_gpu
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("path", ["tiled", "auto"])
+    @pytest.mark.parametrize(
+        "name,request_kw,band",
+        [
+            ("top_left", dict(mask_type=1), dict(causal_top_left=True, right_bound=0)),
+            (
+                "top_left_window",
+                dict(mask_type=1, sliding_window=64),
+                dict(causal_top_left=True, right_bound=0, sliding_window=64),
+            ),
+            (
+                "left_only_window_trio",
+                dict(mask_type=0, sliding_window=64),
+                dict(causal_top_left=True, right_bound=-1, sliding_window=64),
+            ),
+            (
+                "two_sided_window_trio",
+                dict(mask_type=0, sliding_window=96, right_bound=32),
+                dict(causal_top_left=True, right_bound=32, sliding_window=96),
+            ),
+        ],
+    )
+    def test_request_with_equal_batch_maxima_keeps_top_left(
+        self, name, request_kw, band, path
+    ):
+        import dataclasses
+
+        from dispatch.attention import AttentionRequest, _problem, dispatch_attention
+        from kernels import run_unified_attention_torch
+
+        P = _harness()
+        scenario = P.Scenario(
+            name=f"mixed_{name}",
+            seq_lens=self._MIXED,
+            num_query_heads=16,
+            num_kv_heads=2,
+            head_size=128,
+            block_size=16,
+            dtype=torch.float16,
+            num_blocks=4096,
+            sliding_window=band.get("sliding_window") or None,
+            causal_top_left=band["causal_top_left"],
+            right_bound=band["right_bound"],
+        )
+        data = P.make_inputs(scenario)
+        req = AttentionRequest(
+            batch=len(self._MIXED),
+            nhead_q=16,
+            nhead_k=2,
+            seqlen_q=data["max_query_len"],
+            seqlen_k=data["max_kv_len"],
+            hdim_q=128,
+            hdim_v=128,
+            arch="gfx950",
+            dtype="fp16",
+            **request_kw,
+        )
+        assert req.seqlen_q == req.seqlen_k == 700, "the maxima must be equal"
+        problem = _problem(req)
+        assert dispatch_attention(req).spec.causal_top_left
+        assert problem.causal_top_left == band["causal_top_left"]
+        assert problem.right_bound == band["right_bound"]
+        # The request carries ``batch * seqlen_q`` rows; the launch has the real count.
+        problem = dataclasses.replace(problem, total_q=data["query"].shape[0])
+
+        def launch(prob):
+            out = torch.empty_like(data["query"])
+            run_unified_attention_torch(
+                problem=prob,
+                q=data["query"],
+                k=data["key_cache"],
+                v=data["value_cache"],
+                out=out,
+                cu_seqlens_q=data["cu_q"],
+                seqused_k=data["kv_lens"],
+                softmax_scale=data["scale"],
+                block_table=data["block_tables"],
+                softcap=0.0,
+                backend=path,
+            )
+            torch.cuda.synchronize()
+            return out
+
+        ref = P.run_reference(scenario, data)
+        out = launch(problem)
+        assert not torch.isnan(out).any()
+        err = _max_abs(out, ref)
+        assert err < _tol(torch.float16), f"{name}/{path}: max_abs={err:.3e}"
+        # Negative control: the bottom-right body (what the equal-maxima shortcut
+        # selected) must NOT match, or this test could not have caught the bug.
+        wrong = launch(dataclasses.replace(problem, causal_top_left=False))
+        assert _max_abs(wrong, ref) > 1e-2, "bottom-right body unexpectedly matches"
+
+
 class TestTopLeftDecode:
     @requires_gfx950_gpu
     @pytest.mark.gpu

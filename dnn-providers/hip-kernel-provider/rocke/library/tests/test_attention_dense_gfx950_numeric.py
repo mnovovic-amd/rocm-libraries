@@ -1906,6 +1906,12 @@ _BAND_CASES = [
 ]
 
 
+# batch > 1 matters: a q-block that sits entirely past the keys must not read the next
+# batch's tokens, and with batch == 1 the over-read lands in zero-filled (out-of-range)
+# memory, which hides the bug.
+_BAND_BATCH = 2
+
+
 def _band_reference(q, k, v, scale, window, right):
     import torch
 
@@ -1946,7 +1952,7 @@ class TestDenseBandNumeric:
 
         tile = DENSE_TILE_GEOMETRIES["default"]
         spec = Gfx950AttentionDenseSpec(
-            batch=1,
+            batch=_BAND_BATCH,
             seqlen_q=sq,
             seqlen_kv=skv,
             num_query_heads=4,
@@ -1962,9 +1968,9 @@ class TestDenseBandNumeric:
             ragged=ragged,
         )
         torch.manual_seed(0)
-        q = torch.randn(1, sq, 4, 128, device="cuda", dtype=torch.bfloat16)
-        k = torch.randn(1, skv, 1, 128, device="cuda", dtype=torch.bfloat16)
-        v = torch.randn(1, skv, 1, 128, device="cuda", dtype=torch.bfloat16)
+        q = torch.randn(_BAND_BATCH, sq, 4, 128, device="cuda", dtype=torch.bfloat16)
+        k = torch.randn(_BAND_BATCH, skv, 1, 128, device="cuda", dtype=torch.bfloat16)
+        v = torch.randn(_BAND_BATCH, skv, 1, 128, device="cuda", dtype=torch.bfloat16)
         out = torch.empty_like(q)
         scale = 1.0 / math.sqrt(128)
         run_attention_dense_torch(spec=spec, q=q, k=k, v=v, out=out, scale=scale)
@@ -1982,7 +1988,7 @@ class TestDenseBandNumeric:
         from dispatch.attention import AttentionRequest, attention_tuning_spec
 
         req = AttentionRequest(
-            batch=1,
+            batch=_BAND_BATCH,
             nhead_q=4,
             nhead_k=1,
             seqlen_q=sq,
@@ -2001,9 +2007,9 @@ class TestDenseBandNumeric:
         assert spec.causal == (right >= 0) and spec.right_bound == max(right, 0)
         assert spec.ragged == ragged and spec.persistent == persistent
         torch.manual_seed(1)
-        q = torch.randn(1, sq, 4, 128, device="cuda", dtype=torch.bfloat16)
-        k = torch.randn(1, skv, 1, 128, device="cuda", dtype=torch.bfloat16)
-        v = torch.randn(1, skv, 1, 128, device="cuda", dtype=torch.bfloat16)
+        q = torch.randn(_BAND_BATCH, sq, 4, 128, device="cuda", dtype=torch.bfloat16)
+        k = torch.randn(_BAND_BATCH, skv, 1, 128, device="cuda", dtype=torch.bfloat16)
+        v = torch.randn(_BAND_BATCH, skv, 1, 128, device="cuda", dtype=torch.bfloat16)
         out = torch.empty_like(q)
         scale = 1.0 / math.sqrt(128)
         run_attention_dense_torch(spec=spec, q=q, k=k, v=v, out=out, scale=scale)

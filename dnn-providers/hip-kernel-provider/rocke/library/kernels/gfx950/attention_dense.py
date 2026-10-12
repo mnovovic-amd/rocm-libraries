@@ -684,8 +684,9 @@ def build_attention_dense(
     RIGHT = spec.right_bound  # keys visible ahead of the diagonal (causal only)
     DIAG_TILES = (DIAG_OFF + RIGHT) // BN
     # A row whose band holds no key (top-left, Sq > Skv + W - 1, with a window) must
-    # output zeros. Emitted only then, so every other kernel's IR is unchanged.
-    EMPTY_ROWS = W > 0 and not spec.varlen and Sq > Skv + W - 1
+    # output zeros. Emitted only then (emit_lse already zeroes them via row_has_key), so
+    # every other kernel's IR is unchanged.
+    EMPTY_ROWS = W > 0 and not spec.varlen and not spec.emit_lse and Sq > Skv + W - 1
     varlen = spec.varlen
     RAGGED = spec.ragged
     LAZY_RESCALE = spec.lazy_rescale
@@ -1262,6 +1263,18 @@ def build_attention_dense(
         start_tile = b.select(
             b.cmp_gt(_lo_raw, b.const_i32(0)), _lo_raw, b.const_i32(0)
         )
+        if EMPTY_ROWS:
+            # A q-block that starts at or past Skv + W has every key behind its window,
+            # so the unclamped start would point past the last KV tile and the prologue
+            # would load and score another batch's tokens (and for the last batch,
+            # whatever follows the buffer). Pin it to the last real tile: all of its
+            # keys fail the window compare, so the rows stay at the mask sentinel and
+            # the epilogue zeroes them. Blocks with any visible key keep their start.
+            start_tile = b.select(
+                b.cmp_lt(start_tile, b.const_i32(n_ktiles - 1)),
+                start_tile,
+                b.const_i32(n_ktiles - 1),
+            )
     else:
         start_tile = b.const_i32(0)
     start_buf = b.mod(start_tile, b.const_i32(NBUF))
@@ -1643,7 +1656,7 @@ def _build_attention_dense_persistent(spec: AttentionDenseSpec) -> KernelDef:
     SWt = SW // BN  # window length in KV tiles
     RIGHT = spec.right_bound  # keys visible ahead of the diagonal (causal only)
     # See the default builder: rows with no visible key output zeros.
-    EMPTY_ROWS = SW > 0 and not spec.varlen and Sq > Skv + SW - 1
+    EMPTY_ROWS = SW > 0 and not spec.varlen and not spec.emit_lse and Sq > Skv + SW - 1
     LAZY_RESCALE = spec.lazy_rescale
     use_sinks = spec.use_sinks
     WIDE_DMA = spec.wide_lds_dma
@@ -2354,6 +2367,14 @@ def _build_attention_dense_persistent(spec: AttentionDenseSpec) -> KernelDef:
             start_tile = b.select(
                 b.cmp_gt(_lo_raw, b.const_i32(0)), _lo_raw, b.const_i32(0)
             )
+            if EMPTY_ROWS:
+                # See the grid builder: pin a fully-past-the-keys block to the last
+                # real tile instead of reading other batches' tokens.
+                start_tile = b.select(
+                    b.cmp_lt(start_tile, b.const_i32(n_ktiles - 1)),
+                    start_tile,
+                    b.const_i32(n_ktiles - 1),
+                )
         else:
             start_tile = b.const_i32(0)
         start_buf = b.mod(start_tile, b.const_i32(NBUF))

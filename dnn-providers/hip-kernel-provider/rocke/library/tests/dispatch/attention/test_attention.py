@@ -81,15 +81,16 @@ _ENABLE_FEATURE = {
 
 # Features the dispatch spec (hence kernel_name / spec hash) actually encodes.
 # ``fp8`` is carried on AttentionSpec; ``sliding_window`` reroutes 3d->2d and
-# path is in the name. ``causal`` is encoded only as top-left on a cross-length
-# request (the ``tl`` token, see ``AttentionSpec.causal_top_left``) -- which is
-# what this test's ``causal`` case exercises (seqlen_q=1 vs seqlen_k=8192).
+# path is in the name. On gfx950 the mask is encoded too: ``causal`` as the top-left
+# ``tl`` token (see ``AttentionSpec.causal_top_left``) and ``band`` as ``rbu`` /
+# ``rb<R>`` -- which is what this test's ``causal`` / ``band`` cases exercise.
 # ``sinks`` is a PRE-EXISTING gap: the spec is built from (path, head_size,
 # block_size, dtype, gqa, use_fp8) only, so toggling sinks does not change
 # kernel_name today. That fix belongs on the consumers that key a compile cache
 # on kernel_name() and is out of scope here; the gap is frozen below so a future
-# fix trips the test instead of passing silently. NO_MASK vs bottom-right on the
-# unified family is the same kind of gap (the kernels are unconditionally causal).
+# fix trips the test instead of passing silently. (On gfx942 / gfx1250 the tiled
+# kernels are still unconditionally causal, so NO_MASK keeps the bottom-right name
+# there; gfx950 selects a distinct body for it.)
 _IDENTITY_ENCODED = {"band", "causal", "causal_bottom_right", "fp8", "sliding_window"}
 
 

@@ -116,7 +116,10 @@ class AttentionRequest(OperatorRequest):
     # ``BOTTOM_RIGHT_CAUSAL`` fix the right bound at 0 and name their own alignment.
     # ``right_bound``: -1 = unbounded (default), 0 = causal, R > 0 = R keys of
     # lookahead. ``diagonal_alignment``: 0 = TOP_LEFT (default, as hipDNN), 1 =
-    # BOTTOM_RIGHT; it only matters when ``seqlen_q != seqlen_k``.
+    # BOTTOM_RIGHT. The paged unified kernels apply it per sequence (``seqlen_q`` /
+    # ``seqlen_k`` are the batch maxima there), so it matters even when they are
+    # equal; dense takes uniform lengths and ignores it at ``seqlen_q == seqlen_k``.
+    # The same holds for ``TOP_LEFT_CAUSAL`` vs ``BOTTOM_RIGHT_CAUSAL`` on gfx950.
     right_bound: int = -1
     diagonal_alignment: int = 0
     kv_block_size: int = 16  # paged KV block_size (modulus); {16,32,64}
@@ -369,7 +372,9 @@ def _resolve_num_cus(req: AttentionRequest) -> int:
 
 
 def _has_no_mask_kernel(arch: str) -> bool:
-    """Arches whose unified kernels implement full attention (see ``mask_type``)."""
+    """Arches whose unified kernels implement the non-default masks: full attention,
+    top-left and the non-causal band (``UnifiedAttentionProblem``). Elsewhere the
+    tiled kernels are bottom-right causal only."""
     return arch.strip().lower() == "gfx950"
 
 
@@ -377,9 +382,16 @@ def _attention_band(req: AttentionRequest) -> Tuple[bool, int]:
     """``(causal_top_left, right_bound)`` the unified kernels must compute for ``req``.
 
     Raises ``ValueError`` (with the reason) for a request that names no valid band.
-    The left bound is ``req.sliding_window``. At ``seqlen_q == seqlen_k`` the two
-    alignments coincide, so the existing (bottom-right) body is kept; with no bound
-    at all (full attention) alignment is moot as well.
+    The left bound is ``req.sliding_window``. With no bound at all (full attention)
+    alignment is moot. Otherwise the alignment is honoured per sequence:
+    ``seqlen_q`` / ``seqlen_k`` are the batch *maxima* for the paged unified kernels,
+    which derive ``context_len`` per sequence from ``cu_seqlens_q`` / ``seq_lens`` at
+    runtime, so ``seqlen_q == seqlen_k`` does NOT mean every sequence has
+    ``q_len == kv_len`` and top-left must not be folded into bottom-right on that
+    basis. (Dense takes uniform lengths, so ``_dense_band`` applies that shortcut
+    itself.) Arches with no top-left kernel keep the legacy equal-length shortcut and
+    serve top-left with the bottom-right body, which is only right for uniform
+    lengths: a known limitation, see ``_has_no_mask_kernel``.
     """
     mask_type = _parse_attention_mask_type(req.mask_type)
     sq, sk = int(req.seqlen_q), int(req.seqlen_k)
@@ -400,7 +412,9 @@ def _attention_band(req: AttentionRequest) -> Tuple[bool, int]:
                 "right_bound applies only to NO_MASK / SLIDING_WINDOW; the causal "
                 "mask kinds fix it at 0"
             )
-        top_left = mask_type == AttentionMaskType.TOP_LEFT_CAUSAL and sq != sk
+        top_left = mask_type == AttentionMaskType.TOP_LEFT_CAUSAL and (
+            sq != sk or _has_no_mask_kernel(req.arch)
+        )
         return top_left, 0
     # NO_MASK / SLIDING_WINDOW: the (sliding_window, right_bound, alignment) trio.
     window = int(req.sliding_window)
@@ -413,7 +427,7 @@ def _attention_band(req: AttentionRequest) -> Tuple[bool, int]:
             raise ValueError(_BAND_GFX950_ONLY_ERROR)
     if right < 0 and window <= 0:
         return False, -1  # full attention
-    top_left = alignment == 0 and sq != sk
+    top_left = alignment == 0 and (sq != sk or _has_no_mask_kernel(req.arch))
     return top_left, right
 
 

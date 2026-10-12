@@ -314,6 +314,22 @@ It does not implement a window or lookahead at bottom-right alignment with
 `seqlen_q != seqlen_k`; that request is rejected with a reason, and `algorithm="auto"`
 routes it to the unified kernels.
 
+Per-sequence alignment: for the paged unified kernels `seqlen_q` / `seqlen_k` are
+the batch maxima and the diagonal is derived per sequence at runtime, so on gfx950
+`TOP_LEFT_CAUSAL` (or the top-left alignment of the band fields) selects the `_tl`
+body even when the two maxima are equal; it is never folded into bottom-right. Only
+dense, which takes uniform lengths, folds the alignments at equal length. On arches
+without a top-left kernel (gfx942 / gfx1250) the legacy equal-length shortcut remains
+and serves top-left with the bottom-right body, which is correct only when every
+sequence has `q_len == kv_len`.
+
+Known gap: the C++ engine (`platform/cpp/instances/`, the tiled 2D / 3D and unified
+bodies, with the `library/tests/parity/*_emit` pairs) does not yet mirror the
+`causal_top_left` / `right_bound` bodies. The default mask is unchanged, so the
+Python/C++ byte-identity gate still holds, and the new variants' lowered IR is pinned
+by representative cases in `platform/tests/golden/rocke_representative_ir_sha256.json`
+(Python only). Mirroring them in C++ and adding emit pairs is tracked as a follow-up.
+
 Known gap: the gfx942 and gfx1250 tiled kernels are still causal-only. `NO_MASK` is
 the request default, so on those arches it keeps being served by the existing
 causal body (a window on it is a causal window, as before) instead of re-routing

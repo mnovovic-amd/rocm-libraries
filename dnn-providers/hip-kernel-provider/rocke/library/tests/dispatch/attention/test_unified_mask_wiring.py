@@ -111,9 +111,21 @@ class TestBandNormalization(unittest.TestCase):
     def test_causal_kinds(self):
         self.assertEqual(self._band(mask_type=BOTTOM_RIGHT), (False, 0))
         self.assertEqual(self._band(mask_type=TOP_LEFT), (True, 0))
-        # Equal length: the diagonals coincide, keep the existing kernel.
+        # seqlen_q / seqlen_k are the batch MAXIMA for the paged unified kernels, so
+        # equal maxima do not make every sequence q_len == kv_len: top-left must stay
+        # top-left (it is only the same as bottom-right per uniform-length sequence).
         eq = dict(seqlen_q=1024, seqlen_k=1024)
-        self.assertEqual(self._band(mask_type=TOP_LEFT, **eq), (False, 0))
+        self.assertEqual(self._band(mask_type=TOP_LEFT, **eq), (True, 0))
+        self.assertEqual(self._band(mask_type=BOTTOM_RIGHT, **eq), (False, 0))
+
+    def test_equal_length_top_left_keeps_the_legacy_body_off_gfx950(self):
+        # No top-left kernel on gfx942 / gfx1250: the legacy equal-length shortcut
+        # remains there (right only for uniform lengths; documented limitation).
+        eq = dict(seqlen_q=1024, seqlen_k=1024)
+        for arch in ("gfx942", "gfx1250"):
+            self.assertEqual(
+                self._band(mask_type=TOP_LEFT, arch=arch, **eq), (False, 0), arch
+            )
 
     def test_no_mask_is_full_attention(self):
         self.assertEqual(self._band(mask_type=NO_MASK), (False, -1))
@@ -150,12 +162,38 @@ class TestBandNormalization(unittest.TestCase):
             (True, 0),
         )
 
-    def test_equal_length_alignment_is_moot(self):
+    def test_equal_length_alignment_is_still_honoured_on_gfx950(self):
+        # Same reason as for the causal kinds: equal batch maxima say nothing about the
+        # per-sequence lengths, so the alignment must reach the kernel.
         eq = dict(seqlen_q=1024, seqlen_k=1024)
         self.assertEqual(
             self._band(mask_type=NO_MASK, sliding_window=128, right_bound=8, **eq),
+            (True, 8),
+        )
+        self.assertEqual(
+            self._band(
+                mask_type=NO_MASK,
+                sliding_window=128,
+                right_bound=8,
+                diagonal_alignment=BR_ALIGN,
+                **eq,
+            ),
             (False, 8),
         )
+
+    def test_dense_still_folds_equal_length_alignment(self):
+        # Dense takes uniform lengths, so the alignments really do coincide there.
+        from dispatch.attention.gfx950_dense import _dense_band
+
+        eq = dict(seqlen_q=1024, seqlen_k=1024)
+        for kw in (
+            dict(mask_type=TOP_LEFT),
+            dict(mask_type=BOTTOM_RIGHT),
+            dict(mask_type=NO_MASK, sliding_window=128, right_bound=8),
+        ):
+            with self.subTest(**kw):
+                _causal, _right, moving = _dense_band(_req(**kw, **eq))
+                self.assertFalse(moving)
 
     def test_problem_carries_the_band(self):
         p = _problem(_req(mask_type=NO_MASK, sliding_window=256, right_bound=64))
@@ -217,7 +255,11 @@ class TestBandDistinctIdentity(unittest.TestCase):
                 self.assertIn("tl", tl.spec.kernel_name().split("_"))
                 self.assertNotIn("tl", br.spec.kernel_name().split("_"))
 
-    def test_top_left_at_equal_length_is_the_unchanged_kernel(self):
+    def test_top_left_at_equal_length_is_still_the_top_left_kernel(self):
+        # The request's seqlen_q / seqlen_k are batch maxima for the unified family, so
+        # a "square" TOP_LEFT request can still carry q != kv sequences (the PR's own
+        # ``mixed`` cohort: (512,512), (700,200), (200,700), (64,64)). It must run the
+        # top-left body, not be folded into the bottom-right one.
         for label, (_, kw) in _CASES.items():
             kw = dict(kw, seqlen_k=kw.get("seqlen_q", 2048))
             with self.subTest(candidate=label):
@@ -226,8 +268,23 @@ class TestBandDistinctIdentity(unittest.TestCase):
                     br = dispatch_attention(_req(mask_type=BOTTOM_RIGHT, **kw))
                 except ValueError:
                     continue  # shape leaves this cohort once sq == sk
-                self.assertFalse(tl.spec.causal_top_left)
-                self.assertEqual(tl.spec.kernel_name(), br.spec.kernel_name())
+                self.assertTrue(tl.spec.causal_top_left)
+                self.assertFalse(br.spec.causal_top_left)
+                self.assertNotEqual(tl.spec.kernel_name(), br.spec.kernel_name())
+
+    def test_the_mixed_cohort_request_selects_top_left(self):
+        # The reviewer's repro: batch maxima 700 / 700 over a mixed-length cohort.
+        req = _req(
+            batch=4,
+            nhead_q=16,
+            nhead_k=2,
+            seqlen_q=700,
+            seqlen_k=700,
+            dtype="fp16",
+            mask_type=TOP_LEFT,
+        )
+        self.assertEqual(_attention_band(req), (True, 0))
+        self.assertTrue(dispatch_attention(req).spec.causal_top_left)
 
     def test_no_mask_is_its_own_kernel_on_every_unified_candidate(self):
         # Full attention must be neither aliased onto the causal kernels nor onto
