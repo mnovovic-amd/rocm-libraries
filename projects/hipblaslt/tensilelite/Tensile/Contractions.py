@@ -527,6 +527,9 @@ class ProblemPredicate(Properties.Predicate):
         custom = state.get("CustomKernel")
         name = custom.get("name", "") if isinstance(custom, dict) else ""
         maxN = w4a16DecodeMaxN(name or state.get("CustomKernelName", ""))
+        if state.get("W4A16Decode"):
+            from .KernelWriterW4A16Decode import DecodeConfig
+            maxN = DecodeConfig.fromSolution(state).maxN
         if maxN is None:
             return []
         predicates = [cls("SizeEqual", index=2, value=1),
