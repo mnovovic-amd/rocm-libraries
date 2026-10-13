@@ -1576,16 +1576,14 @@ GFX125_QR_TDM_BM0_CROSSOVER_MAX_SEQLEN_Q = {
 GFX125_D192_N128_MIN_AVERAGE_K = 512
 
 
-# d128 fp16/bf16: masks with a finite window keep the bm0=64 K ping/pong tile
-# up to 2048 rows (measured: the bm0=128 tile is 25-50% slower there).
+# d128 fp16/bf16: finite windows keep bm0=64 up to 2048 rows (bm0=128 is 25-50% slower).
 GFX125_QR_TDM_D128_WINDOWED_MASK = (
     "t.mask_type != mask_enum::no_mask"
     " && !(a.window_size_left < 0 && a.window_size_right == 0)"
 )
 
-# d128 fp16/bf16 causal on grids of at most 2 bm0=128 blocks per CU take the
-# double K/V buffer bm0=64 kernel (the _o2 tile): with that few workgroups the
-# K/V prefetch hides more latency than the K ping/pong body's occupancy buys.
+# d128 fp16/bf16 causal on grids of <= 2 bm0=128 blocks per CU: the double K/V
+# buffer bm0=64 kernel (the _o2 tile) hides more K/V latency there.
 GFX125_QR_TDM_D128_TINY_GRID = "get_num_blocks(128) <= 2 * num_cus"
 
 
@@ -1730,32 +1728,20 @@ class KernelComponentFactoryGfx125(CompatibilityRuleFactory):
         def check_qr_tdm_kv_lds_buffering(
             problem_ctx: ProblemContext, kernel_ctx: KernelContext
         ) -> bool:
-            # d128 fp16/bf16: the bm0=64 tile takes the single-V-buffer K ping/pong
-            # body, the bm0=128 tile the double K/V buffer one, the _o2 bm0=64 tile
-            # the double-buffer causal kernels only. The ping/pong tile carries no
-            # causal kernel: it serves causal through the simplified mask. Every
-            # other qr_tdm problem keeps whatever get_pipelines emits.
-            if kernel_ctx.pipeline.tag != "qr_tdm":
-                # The d128 _o2 bm0=64 tile exists for the qr_tdm double-buffer causal
-                # kernel only; other pipelines' tiles (qr_tdm_sched's set an occupancy
-                # too) are left alone.
-                return not (
-                    problem_ctx.dtype in cls._DT_FP16_BF16
-                    and (problem_ctx.hdim, problem_ctx.hdim_v) == (128, 128)
-                    and kernel_ctx.tile.F_bm0 == 64
-                    and kernel_ctx.tile.F_occupancy != -1
-                )
-            if problem_ctx.dtype not in cls._DT_FP16_BF16:
+            # d128 fp16/bf16 qr_tdm: the bm0=128 and _o2 tiles take the double K/V
+            # buffer body, the others the K ping/pong body; at bm0=64 only the _o2
+            # tile carries causal kernels. The _o2 tile is qr_tdm's alone.
+            if problem_ctx.dtype not in cls._DT_FP16_BF16 or (
+                problem_ctx.hdim, problem_ctx.hdim_v
+            ) != (128, 128):
                 return True
-            if (problem_ctx.hdim, problem_ctx.hdim_v) != (128, 128):
-                return True
-            use_double = kernel_ctx.pipeline.F_use_double_kv_lds_buffer == "t"
-            if kernel_ctx.tile.F_bm0 == 64:
-                if kernel_ctx.tile.F_occupancy != -1:
-                    return use_double and kernel_ctx.pipeline.F_mask == "causal"
-                if kernel_ctx.pipeline.F_mask == "causal":
-                    return False
-            return use_double == (kernel_ctx.tile.F_bm0 == 128)
+            tile, pipeline = kernel_ctx.tile, kernel_ctx.pipeline
+            o2 = tile.F_bm0 == 64 and tile.F_occupancy != -1
+            if pipeline.tag != "qr_tdm":
+                return not o2
+            if (pipeline.F_use_double_kv_lds_buffer == "t") != (tile.F_bm0 == 128 or o2):
+                return False
+            return tile.F_bm0 != 64 or (pipeline.F_mask == "causal") == o2
 
         # The sched rule stays last (its tests address it as get_rules()[-1]).
         rules.extend(
@@ -1913,14 +1899,9 @@ class KernelComponentFactoryGfx125(CompatibilityRuleFactory):
 
             if (hdim, hdim_v) in cls._QR_TDM_SCHED_TILES:
                 # Finite virtual-sink logits retain the existing qr_tdm fallback.
-                # d128 keeps its bm0=64 K ping/pong tile below the bm0 crossover,
-                # where it is 1.1x-1.8x faster than the scheduled pipeline (dense
-                # and causal); the scheduled pipeline takes over from there.
-                sched_min_seqlen_q = (
-                    GFX125_QR_TDM_BM0_CROSSOVER_MAX_SEQLEN_Q[(128, 128)]
-                    if (hdim, hdim_v) == (128, 128)
-                    else 128
-                )
+                # qr_tdm_sched takes over at qr_tdm's bm0 crossover: below it d128's
+                # bm0=64 K ping/pong tile is 1.1x-1.8x faster than qr_tdm_sched.
+                sched_min_seqlen_q = GFX125_QR_TDM_BM0_CROSSOVER_MAX_SEQLEN_Q[(hdim, hdim_v)]
                 sched_constraint = CppConstraint(
                     f"a.hdim_q == {hdim} && "
                     f"a.hdim_v == {hdim_v} && a.sink_ptr == nullptr && "
