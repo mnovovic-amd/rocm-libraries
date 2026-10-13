@@ -1353,12 +1353,13 @@ namespace TensileLite
             bool swizzleTensorB             = false;
             bool fusedGemmA2A               = false;
             int  metadataLayout             = 0;
-            // K-group size for dense [M][ceil(K/G)] scales of B's type.
-            int              scaleBlockSizeA = 0;
-            // Enable per-group zero-points: (q - z)*s.
-            bool             scaleZeroPointA = false;
-            ContractionProblemGemm::Int4Encoding int4EncodingA
-                = ContractionProblemGemm::Int4Encoding::Signed;
+            // The w4a16 group size, zero-point flag and int4 encoding are
+            // deliberately absent: solution matching reads them from the
+            // ScaleBlockSizeA / ScaleZeroPointA / Int4EncodingA predicates, and
+            // the launch reads them off the problem. A copy here would only
+            // duplicate that state, and for a runtime-group kernel it could not
+            // even be right -- its predicate is Or[32, 64, 128] while a single
+            // field could hold just one of them.
             int  mxBlockA                   = 0;
             int  mxBlockB                   = 0;
             rocisa::DataType mxTypeA        = rocisa::DataType::E8;

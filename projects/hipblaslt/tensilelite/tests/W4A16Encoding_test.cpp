@@ -18,7 +18,8 @@ TEST(W4A16Encoding, PredicateMatchesEncoding)
     ContractionProblemGemm problem;
     Predicates::Contraction::Int4EncodingA signedPredicate(Encoding::Signed);
     Predicates::Contraction::Int4EncodingA unsignedPredicate(Encoding::UnsignedBias8);
-    EXPECT_EQ(ContractionSolution::ProblemType{}.int4EncodingA, Encoding::Signed);
+    // The solution's ProblemType carries no encoding of its own; the predicate
+    // is where the default lives and where matching reads it.
     EXPECT_EQ(Predicates::Contraction::Int4EncodingA{}.value, Encoding::Signed);
     for(auto encoding : {Encoding::Signed, Encoding::UnsignedBias8})
     {
