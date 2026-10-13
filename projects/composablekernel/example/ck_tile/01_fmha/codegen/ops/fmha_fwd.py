@@ -351,12 +351,9 @@ class FmhaFwdApiTrait:
     # template instantiations of `fmha_fwd_<traits, arch>`, so multiple
     # occupancy variants for the same tile can coexist in one shared object.
     occupancy: int = -1
-    # qr_tdm kernel that runs the K ping/pong body (see
-    # is_qr_tdm_k_ping_pong_problem_v). It never assumes in-bounds TDM boxes:
-    # OOB rows are zero-filled and the last S tile is always tail-masked, so
-    # the unpadded instance serves any seqlen_k -- except with an elementwise
-    # bias, whose rows are vector-loaded at a stride of seqlen_k and so still
-    # need seqlen_k to be a multiple of the tile.
+    # qr_tdm kernel on the K ping/pong body (is_qr_tdm_k_ping_pong_problem_v). It
+    # zero-fills OOB rows and tail-masks the last S tile, so the unpadded instance
+    # serves any seqlen_k, except with an elementwise bias (vector-loaded rows).
     tdm_k_ping_pong: bool = False
     constraint: CppConstraint = field(default_factory=lambda: CppConstraint())
 

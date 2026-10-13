@@ -8,26 +8,12 @@
 
 namespace ck_tile {
 
-// Store out an M*N row-major matrix, staging it through LDS so that the global
-// stores are coalesced.
-//
-// The accumulator arrives in the warp-GEMM C layout: on a wave32 machine a lane
-// owns 8 contiguous elements every 16, so the 32 lanes of one store instruction
-// land on 16 different rows, two 16-byte fragments each. Rows are stride_o apart
-// (e.g. 512 B for BSHD with h=2, d=128), so a single instruction touches 16
-// separate cache lines and writes a fraction of each. Staging through LDS
-// (a warp-level transpose) lets every store instruction cover two whole rows
-// and issue a single coalesced HBM write.
-//
-// This is the same idea as CShuffleEpilogue, but that one is tied to the XDL
-// warp-GEMM shape (kMPerXdl / kNPerXdl / BlockedXDLN_PerWarp) and carries the
-// D-tensor chaining machinery; a wave32 WMMA C layout does not fit its problem
-// description, hence a separate, much smaller epilogue.
-
-// NOTE: the warp count, not the block size, is the template parameter.
-// get_warp_size() is constexpr but returns 64 on host (where the kernel symbol
-// is formed) and 32 on device (wave32). Using kNumWarps keeps the type
-// independent of the host/device boundary and avoids a host/device symbol mismatch.
+/**
+ * @brief Problem description of LdsShuffle2DEpilogue.
+ *
+ * @note The warp count, not the block size, is the template parameter: get_warp_size()
+ *       is 64 on the host, where the kernel symbol is formed, and 32 on a wave32 device.
+ */
 template <typename AccDataType_,
           typename ODataType_,
           index_t kNumWarps_,
@@ -47,6 +33,18 @@ struct LdsShuffle2DEpilogueProblem
     static constexpr index_t NumDTensor = 0;
 };
 
+/**
+ * @brief Stores an M x N row-major tile through LDS so that the global stores are
+ *        coalesced.
+ *
+ * @details In the wave32 WMMA C layout a lane owns 8 contiguous elements of every 16, so
+ *          one store instruction touches 16 rows, each stride_o apart. Transposing the
+ *          tile through LDS lets every store instruction cover whole rows. CShuffleEpilogue
+ *          does the same for the XDL C layout, which this layout does not fit.
+ *
+ *          Row widths whose vectors cannot tile a wavefront (e.g. d = 96, 160, 192) keep
+ *          the direct store of Default2DEpilogue and need no LDS.
+ */
 template <typename Problem_, typename Policy_ = void>
 struct LdsShuffle2DEpilogue
 {
@@ -54,99 +52,83 @@ struct LdsShuffle2DEpilogue
     using AccDataType = remove_cvref_t<typename Problem::AccDataType>;
     using ODataType   = remove_cvref_t<typename Problem::ODataType>;
 
-    static constexpr index_t kNumWarps = Problem::kNumWarps;
-    static constexpr index_t kM        = Problem::kMPerBlock;
-    static constexpr index_t kN        = Problem::kNPerBlock;
-    static constexpr bool kPadM        = Problem::kPadM;
-    static constexpr bool kPadN        = Problem::kPadN;
+    static constexpr index_t kNumWarps  = Problem::kNumWarps;
+    static constexpr index_t kMPerBlock = Problem::kMPerBlock;
+    static constexpr index_t kNPerBlock = Problem::kNPerBlock;
+    static constexpr bool kPadM         = Problem::kPadM;
+    static constexpr bool kPadN         = Problem::kPadN;
 
     static_assert(Problem::NumDTensor == 0, "D-tensor chaining is not implemented");
     static_assert(sizeof(ODataType) <= 16, "ODataType wider than 16 B is not supported");
 
-    // 16-byte vector access, the widest ds_/buffer_ op.
+    // widest ds_/buffer_ access: 16 bytes
     static constexpr index_t kVectorMax = 16 / static_cast<index_t>(sizeof(ODataType));
 
-    // A vectorized global store carries ONE out-of-bounds flag for the whole
-    // access, taken from its first element (tensor_view::set_vectorized_elements),
-    // so a vector that straddles the N boundary is written in full. When N is
-    // padded the dispatcher only guarantees hdim_v % kPadNAlignment == 0
-    // (fmha_fwd.py: the qr_tdm dvcheck), so the store vector must divide that,
-    // or the tail access spills into the next row. Unpadded N is exact and
-    // needs no clamp. kPadM needs no equivalent: the M vector length is 1,
-    // rows being stride_o apart, so the row check is already per-element.
+    // A vector store carries one out-of-bounds flag, taken from its first element. A padded
+    // N is only guaranteed to be a multiple of kPadNAlignment (the qr_tdm dvcheck in
+    // fmha_fwd.py), so the vector must divide it or the tail spills into the next row.
     static constexpr index_t kPadNAlignment = 8;
     static constexpr index_t kVector =
         kPadN ? (kVectorMax < kPadNAlignment ? kVectorMax : kPadNAlignment) : kVectorMax;
 
-    // Pad the LDS row pitch so that row_bytes % 128 == 32. A wave writing the
-    // warp-GEMM layout covers one contiguous 8-dword block per row; with the
-    // pitch 32 bytes off a bank-cycle those 16 blocks start at four distinct
-    // bank offsets, four rows each, which is the conflict-free minimum for the
-    // 128 dwords a wave32 ds_write_b128 moves. An unpadded 256-byte pitch puts
-    // every row on the same bank. Solve for the pad rather than assuming an
-    // already-128-byte-aligned row, so the property survives any kN.
-    static constexpr index_t kRowBytes = kN * static_cast<index_t>(sizeof(ODataType));
+    // LDS row pitch with row_bytes % 128 == 32, so the rows a wave writes start on four
+    // different bank offsets.
+    static constexpr index_t kRowBytes = kNPerBlock * static_cast<index_t>(sizeof(ODataType));
     static constexpr index_t kPadBytes = ((32 - kRowBytes) % 128 + 128) % 128;
-    static constexpr index_t kNLds     = kN + kPadBytes / static_cast<index_t>(sizeof(ODataType));
+    static constexpr index_t kNLds =
+        kNPerBlock + kPadBytes / static_cast<index_t>(sizeof(ODataType));
 
-    static_assert(kN % kVector == 0, "kN must be a multiple of the vector size");
+    static_assert(kNPerBlock % kVector == 0, "kNPerBlock must be a multiple of the vector size");
     static_assert(kPadBytes % static_cast<index_t>(sizeof(ODataType)) == 0,
                   "LDS row pad must be a whole number of elements");
     static_assert((kRowBytes + kPadBytes) % 128 == 32, "LDS row pitch is not bank-staggered");
     static_assert((kNLds * sizeof(ODataType)) % 16 == 0,
                   "LDS row pitch must stay 16-byte aligned for b128 access");
 
-    // The coalesced re-read uses a thread-raked distribution: the kN / kVector
-    // vectors of a row must tile a wavefront exactly, and the rows the block
-    // covers per pass must divide kM. Head dims such as 96, 160 or 192 split a row
-    // into 12, 20 or 24 vectors, which no wavefront tiles; those keep the direct
-    // store and need no LDS, decided at compile time. Evaluated with the compiling
-    // side's get_warp_size(), as the distribution itself is.
+    /**
+     * @brief Whether the thread-raked re-read tiles the block: the vectors of a row must
+     *        tile a wavefront and the rows per pass must divide kMPerBlock. Evaluated with
+     *        the compiling side's warp size, as the distribution itself is.
+     */
     CK_TILE_HOST_DEVICE static constexpr bool IsShuffleTileable()
     {
         constexpr index_t warp_size = get_warp_size();
-        constexpr index_t largest   = kM * kN / (kNumWarps * warp_size);
+        constexpr index_t largest   = kMPerBlock * kNPerBlock / (kNumWarps * warp_size);
         constexpr index_t x1        = kVector < largest ? kVector : largest;
-        if constexpr(x1 < 1 || kN % x1 != 0)
+        if constexpr(x1 < 1 || kNPerBlock % x1 != 0)
         {
             return false;
         }
         else
         {
-            constexpr index_t x0 = warp_size < kN / x1 ? warp_size : kN / x1;
+            constexpr index_t x0 = warp_size < kNPerBlock / x1 ? warp_size : kNPerBlock / x1;
             constexpr index_t y1 = warp_size / x0;
-            return x0 * y1 == warp_size && kN % (x0 * x1) == 0 && kM % (y1 * kNumWarps) == 0;
+            return x0 * y1 == warp_size && kNPerBlock % (x0 * x1) == 0 &&
+                   kMPerBlock % (y1 * kNumWarps) == 0;
         }
     }
 
     CK_TILE_HOST_DEVICE static constexpr index_t GetSmemSize()
     {
-        return IsShuffleTileable() ? static_cast<index_t>(kM * kNLds * sizeof(ODataType)) : 0;
+        return IsShuffleTileable() ? static_cast<index_t>(kMPerBlock * kNLds * sizeof(ODataType))
+                                   : 0;
     }
 
-    // The global store itself, in whichever layout, is Default2DEpilogue's. Its
-    // raw store on padded windows matters: plain store_tile there lets the
-    // compiler build the buffer resource in VGPRs and wrap every buffer_store in
-    // a readfirstlane waterfall loop.
+    // Default2DEpilogue's store also keeps the buffer resource of a padded window scalar.
     using DirectStore =
         Default2DEpilogue<Default2DEpilogueProblem<AccDataType, ODataType, kPadM, kPadN>>;
 
-    // Advertises that operator() takes a 4th (smem) argument; read through
-    // ck_tile::detail::epilogue_uses_smem_v. The caller cannot probe the call
-    // expression instead: Default2DEpilogue and others already have a defaulted
-    // `void*` 4th parameter, so an arity probe matches them too.
+    // operator() takes the LDS block as a 4th argument (see detail::epilogue_uses_smem_v).
     static constexpr bool kUsesSmem = true;
 
-    // The LDS-shuffle path is selected on the *type* of the smem argument, not
-    // its value: a caller with no spare LDS passes the `nullptr` literal
-    // (std::nullptr_t) and gets the direct-store fallback, everyone else passes
-    // a real pointer. A runtime `p_smem == nullptr` test here would make the
-    // compiler emit both paths, and the dead one still takes part in register
-    // allocation.
-    //
-    // The parameter is defaulted so that this epilogue stays substitutable for
-    // Default2DEpilogue at the existing three-argument call sites; those keep
-    // the direct store, which is correct, just not coalesced.
+    /**
+     * @brief Stores o_acc_tile to o_dram_window_tmp, through LDS at p_smem when given.
+     *
+     * @details The path is chosen on the type of p_smem: the `nullptr` literal selects the
+     *          direct store at compile time, so the unused path takes no registers. The
+     *          parameter is defaulted, so three-argument callers of Default2DEpilogue keep
+     *          working with the direct store.
+     */
     template <typename ODramWindowTmp,
               typename OAccTile,
               typename DsDramWindows,
@@ -159,13 +141,12 @@ struct LdsShuffle2DEpilogue
         if constexpr(std::is_same_v<PSmem, std::nullptr_t> || !IsShuffleTileable())
         {
             ignore = p_smem;
-            // No spare LDS: store the accumulator layout straight out, scattered.
             DirectStore{}(o_dram_window_tmp, o_acc_tile, nullptr);
         }
         else
         {
             const auto lds_desc =
-                make_naive_tensor_descriptor(make_tuple(number<kM>{}, number<kN>{}),
+                make_naive_tensor_descriptor(make_tuple(number<kMPerBlock>{}, number<kNPerBlock>{}),
                                              make_tuple(number<kNLds>{}, number<1>{}),
                                              number<kVector>{},
                                              number<1>{});
@@ -173,29 +154,29 @@ struct LdsShuffle2DEpilogue
             auto o_lds = make_tensor_view<address_space_enum::lds>(
                 reinterpret_cast<ODataType*>(p_smem), lds_desc);
 
-            auto in_lds_window = make_tile_window(o_lds,
-                                                  make_tuple(number<kM>{}, number<kN>{}),
-                                                  {0, 0},
-                                                  o_acc_tile.get_tile_distribution());
+            auto in_lds_window =
+                make_tile_window(o_lds,
+                                 make_tuple(number<kMPerBlock>{}, number<kNPerBlock>{}),
+                                 {0, 0},
+                                 o_acc_tile.get_tile_distribution());
 
-            // The pipeline's last V TDM may still be on the tensorcnt counter;
-            // drain both counters before writing LDS to avoid a WAW hazard.
-            // Spell both: the single-arg form skips s_wait_dscnt by default.
+            // The pipeline's last TDM may still be writing LDS: drain the tensor and LDS
+            // counters (the single-argument form skips dscnt) before overwriting it.
             s_wait_tensorcnt_barrier<0, 0>();
             store_tile(in_lds_window, cast_tile<ODataType>(o_acc_tile));
             block_sync_lds();
 
             using TileEncodingPattern =
                 tile_distribution_encoding_pattern_2d<kNumWarps * get_warp_size(),
-                                                      kM,
-                                                      kN,
+                                                      kMPerBlock,
+                                                      kNPerBlock,
                                                       kVector,
                                                       tile_distribution_pattern::thread_raked>;
 
             constexpr auto dram_dist = TileEncodingPattern::make_2d_static_tile_distribution();
 
-            auto out_lds_window =
-                make_tile_window(o_lds, make_tuple(number<kM>{}, number<kN>{}), {0, 0}, dram_dist);
+            auto out_lds_window = make_tile_window(
+                o_lds, make_tuple(number<kMPerBlock>{}, number<kNPerBlock>{}), {0, 0}, dram_dist);
 
             DirectStore{}(o_dram_window_tmp, load_tile(out_lds_window), nullptr);
         }

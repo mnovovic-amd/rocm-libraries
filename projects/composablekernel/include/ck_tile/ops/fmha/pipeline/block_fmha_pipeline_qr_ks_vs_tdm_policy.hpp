@@ -223,14 +223,9 @@ inline constexpr bool is_qr_tdm_16bit_qkv_v =
      std::is_same_v<typename Problem::KDataType, half_t> &&
      std::is_same_v<typename Problem::VDataType, half_t>);
 
-// Single V buffer with a whole-tile K ping/pong ("K ping/pong" layout):
-//   [K0][K1][S][V, aliased by Q]
-// K is staged whole-tile (kSubQKHeaddim wide), so one TDM covers the head dim per
-// KV iteration, and the second K buffer lets the next K tile be issued without a
-// workgroup barrier against the QK gemm still reading the current one. Q aliases
-// V rather than K, so the first K transfer overlaps Q's. Only the 16-bit,
-// non-quantized single K/V LDS buffer problems take it; the 8-bit types keep the
-// plain single-buffer body.
+// 16-bit single K/V LDS buffer problems run the K ping/pong body: K staged whole-tile
+// in two buffers, one V buffer, Q on V (see QrTdmLdsArenaLayout). The 8-bit types keep
+// the plain single-buffer body.
 template <typename Problem>
 inline constexpr bool is_qr_tdm_k_ping_pong_problem_v =
     !Problem::kUseDoubleKVLdsBuffer && is_qr_tdm_16bit_qkv_v<Problem> &&
@@ -267,8 +262,8 @@ inline constexpr bool is_qr_tdm_padding_enabled_problem_v =
     numeric_traits<typename Problem::KDataType>::PackedSize == 1 &&
     numeric_traits<typename Problem::VDataType>::PackedSize == 1;
 
-// The K ping/pong layout pads every Q/K/V row once, at the row end, so the rows
-// must be a power-of-2 number of bytes (the TDM padding interval is a power of 2).
+// The K ping/pong layout pads each Q/K/V row once, so a row must be a power-of-2
+// number of bytes, like the TDM padding interval.
 template <typename Problem>
 inline constexpr bool is_qr_tdm_k_ping_pong_padding_enabled_v =
     is_qr_tdm_padding_supported_arch_v && is_qr_tdm_k_ping_pong_problem_v<Problem> &&
@@ -304,10 +299,8 @@ struct QrTdmPaddingSelection
     using V = LdsPaddingConfig<false, 0, 0>;
 };
 
-// K ping/pong layout: one pad per row. Q and K rows get one 16 B vector, which
-// moves consecutive rows onto different bank groups for the row-strided
-// ds_load_b128 reads; V gets two, the optimum measured for the transposed
-// ds_load_tr reads.
+// K ping/pong layout: one pad per row, 16 B for Q and K (row-strided ds_load_b128)
+// and 32 B for V (transposed ds_load_tr).
 template <typename Problem>
 struct QrTdmPaddingSelection<Problem, QrTdmPaddingMode::k_ping_pong>
 {
@@ -708,15 +701,9 @@ struct BlockFmhaPipelineQRKSVSTdmDefaultPolicy
         return BlockGemmARegBRegCRegV2<GemmProblem, BlockGemmPolicy>{};
     }
 
-    // Row sum of P on the matrix unit: P (M x kN0) times a ones matrix
-    // (kN0 x one warp tile of N). The VALU fold it replaces is a long dependent
-    // v_add chain that the scheduler spreads across the PV WMMAs, paying v_nop
-    // hazards for every VALU write to a register an in-flight WMMA still reads.
-    //
-    // The N-wide result is the row sum replicated across the warp tile's columns,
-    // in the same C distribution as o_acc, so the value each lane needs is already
-    // in that lane: no shuffle, no reduce_sync. Same data types and WarpGemm as the
-    // PV gemm; only N shrinks from kN1 to a single warp tile.
+    // Row sum of P on the matrix unit: P (M x kN0) times ones (kN0 x one warp tile).
+    // Same types and warp gemm as the PV gemm, so the sum lands replicated in o_acc's
+    // distribution and needs no cross-lane reduction.
     template <typename Problem>
     CK_TILE_HOST_DEVICE static constexpr auto GetRowSumBlockGemm()
     {
@@ -987,8 +974,7 @@ struct BlockFmhaPipelineQRKSVSTdmDefaultPolicy
     template <typename Problem>
     CK_TILE_HOST_DEVICE static constexpr ck_tile::index_t GetSmemSize()
     {
-        // The arena layout owns the region offsets, alignment and aliasing; summing the
-        // region sizes here would drop the 256-byte region alignment.
+        // The arena layout owns the region offsets, alignment and aliasing.
         return LdsArenaLayout<Problem>::kArenaBytes;
     }
 };
@@ -1001,11 +987,10 @@ namespace detail {
 // completes the tensor-count barrier before K/V overwrite that storage. For the measured d=128
 // K+V configuration the layouts are:
 //   double K/V LDS buffer: Q/K0=0, K1=17408, V0=34816, V1=53248, end=71680
-//   single K/V LDS buffer: Q/K0=0, S=4336, V0=4352, end=22784 (8-bit types)
-//   K ping/pong (16-bit):  K0=0, K1=17408, Q/V0=34816, end=53248
-// The K ping/pong layout (see is_qr_tdm_k_ping_pong_problem_v) puts Q on V instead of K: Q's only
-// LDS read happens before the main loop and V's first write follows the barrier at the loop head,
-// so K's first transfer can be issued right behind Q's without waiting for Q to drain.
+//   K ping/pong (single V buffer): K0=0, K1=17408, Q/V0=34816, end=53248
+// The single K/V LDS buffer layout (Q/K0, S, V0) is left to the 8-bit types. K ping/pong puts
+// Q on V instead of K: Q is read once before the main loop and V's first write follows the
+// loop-head barrier, so K's first transfer can be issued right behind Q's.
 // Region alignment follows one gfx1250 LDS bank row.
 template <typename Problem, typename QPadding, typename KPadding, typename VPadding>
 struct QrTdmLdsArenaLayout

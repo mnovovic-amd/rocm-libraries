@@ -500,16 +500,10 @@ struct BlockFmhaPipelineQRKSVSTdm
         return p_tile;
     }
 
-    // Tree-shaped in-thread row sum of P, followed by the usual cross-lane sync.
-    //
-    // The generic block_tile_reduce folds a row serially (acc = acc + in), and fp32
-    // addition is not reassociable, so the compiler has to keep that shape: at 32
-    // elements per lane it is a 32-deep dependent v_add_f32 chain in the same
-    // scheduling region as the PV WMMAs. The scheduler interleaves the two to hide
-    // the latency and pays for it: on gfx1250 a VALU write to a register still
-    // sourced by an in-flight v_wmma costs four v_nop. A pairwise tree does the same
-    // adds with depth log2(n), its halving steps give LLVM adjacent operand pairs to
-    // fuse into v_pk_add_f32, and it is better conditioned than a serial fold.
+    // Row sum of P as a pairwise tree per thread, then the cross-lane sync. The
+    // serial fold of block_tile_reduce is a dependent v_add_f32 chain the
+    // scheduler interleaves with the PV WMMAs, paying v_nop hazards for it; the
+    // tree has depth log2(n) and pairs operands for v_pk_add_f32.
     template <typename PComputeTensor>
     CK_TILE_DEVICE static auto BlockRowSum(const PComputeTensor& p_compute)
     {
@@ -519,8 +513,7 @@ struct BlockFmhaPipelineQRKSVSTdm
                 sequence<1>{})));
 
         constexpr auto spans = PComputeTensor::get_distributed_spans();
-        // unpack the whole row span in one call so the values are addressable by
-        // ordinal and can be folded as a tree instead of a chain
+        // unpack the whole row span so its values are addressable by ordinal
         constexpr auto row_lengths = typename decltype(spans[I1])::Impl{};
 
         sweep_tile_span(spans[I0], [&](auto idx0) {
@@ -553,18 +546,15 @@ struct BlockFmhaPipelineQRKSVSTdm
         return rowsum;
     }
 
-    // l += rowsum(P), evaluated on the matrix unit instead of the VALU; see
-    // GetRowSumBlockGemm. The C tile comes back in o_acc's distribution with the row
-    // sum replicated across the warp tile's columns, so every lane already holds the
-    // value for the rows it owns.
+    // l += rowsum(P) on the matrix unit (see GetRowSumBlockGemm). The result comes
+    // back in o_acc's distribution, replicated across the warp tile's columns.
     template <typename LTensor, typename PTile>
     CK_TILE_DEVICE static void AccumulateRowSumOnMatrixUnit(LTensor& l, const PTile& p_tile)
     {
         constexpr auto gemm_rowsum = Policy::template GetRowSumBlockGemm<Problem>();
         using RowSumGemm           = remove_cvref_t<decltype(gemm_rowsum)>;
 
-        // Constant B operand: packed 16-bit 1.0 is one 32-bit pattern, so this is a
-        // broadcast mov rather than per-element stores.
+        // constant B operand of ones
         auto ones = make_static_distributed_tensor<PDataType>(
             make_static_tile_distribution(RowSumGemm::MakeBBlockDistributionEncode()));
         static_for<0, decltype(ones)::get_thread_buffer_size(), 1>{}(
@@ -654,9 +644,8 @@ struct BlockFmhaPipelineQRKSVSTdm
         // init M, L (sink-aware: when sink_v is finite, pre-seed m/l)
         auto m = MLBlockTileType{};
         auto l = MLBlockTileType{};
-        // Exponent o_acc/l are currently normalised to. Lags behind the
-        // running row max m by up to kRebaseThreshold octaves -- see the
-        // lazy-rebasing block in the main loop.
+        // row max o_acc and l are normalised to; trails m by up to
+        // kRebaseThreshold (see the lazy rebasing in the main loop)
         auto m_base = MLBlockTileType{};
 
         clear_tile(o_acc);
@@ -733,14 +722,7 @@ struct BlockFmhaPipelineQRKSVSTdm
             }
         }
 
-        // ---------------------------------------------------------------------
-        // TDM configs for Q / K / V
-        // pad_enable + pad_amount + pad_interval are compile-time, sourced from
-        // the policy. workgroup_mask defaults to 0 (no cluster multicast).
-        // V uses load_tile_tdm (single-box plain layout) -- same TDM machinery
-        // as Q / K, with V dram dist switched to trivial tile-major and the
-        // V LDS read view kept plain row-major (matches the write view).
-        // ---------------------------------------------------------------------
+        // TDM configs for Q / K / V; the LDS padding comes from the policy.
         TDMConfig tdm_config_q;
         TDMConfig tdm_config_k;
         TDMConfig tdm_config_v;
@@ -768,19 +750,9 @@ struct BlockFmhaPipelineQRKSVSTdm
         auto q_dram_window = make_tile_window(
             q_dram_block_window_tmp, Policy::template MakeQDramTileDistribution<Problem>());
 
-        // Q LDS writer (TDM) and reader share plain row-major desc; TDM
-        // box-major write cannot produce XOR'd layout, so no swizzle here.
-        //
-        // Q shares V's region, not K's: K then has its own region, so its
-        // transfer is issued right behind Q's and the two HBM round trips
-        // overlap; only Q is drained before the register read
-        // (s_wait_tensorcnt_barrier<1>).
-        //
-        // Safety: Q's *only* LDS read is the load_tile below the V window
-        // setup, before the do-loop. V's first write is the first statement
-        // inside the loop, after the loop-head barrier, which also drains the
-        // LDS reads (s_wait_dscnt 0) so every wave has retired its Q ds_loads
-        // before any wave issues the V TDM into the same bytes.
+        // Q sits on V's region, so K's transfer can be issued right behind Q's.
+        // Q is read once, before the loop; the loop-head barrier drains those
+        // reads before the first V transfer overwrites the region.
         QDataType* const q_smem_ptr =
             reinterpret_cast<QDataType*>(static_cast<char*>(smem_arena) + Layout::kQOffset);
 
@@ -819,28 +791,15 @@ struct BlockFmhaPipelineQRKSVSTdm
                              {bias_origin.at(number<0>{}), kv_load_start},
                              gemm_0.MakeCBlockTile().get_tile_distribution());
 
-        // K staging is whole-tile ("load once"): the K LDS buffer holds the
-        // full (kN0 x kSubQKHeaddim) tile, so one TDM transfer per KV
-        // iteration replaces the k0_loops separate kK0-slice transfers. The
-        // QK gemm then walks the kK0 slices by sliding the LDS *read* window,
-        // which needs no barrier and no tensorcnt drain between steps.
-        //
-        // K is double buffered (K0/K1 below): the next tile is staged into the
-        // buffer this trip does not read. The two buffers share one descriptor,
-        // so the ping/pong costs no VGPRs, only the second K region of LDS.
+        // K is staged whole-tile (one TDM transfer per iteration) and double
+        // buffered: the next tile goes into the buffer this trip does not read.
         auto k_dram_window =
             make_tile_window(k_dram_block_window_tmp,
                              {kv_load_start, 0},
                              Policy::template MakeKDramTileDistribution<Problem, true>());
 
-        // K LDS writer (TDM) and reader share plain row-major desc; see Q
-        // comment above for the no-swizzle rationale.
-        //
-        // Two buffers, one descriptor. The descriptor is identical for both
-        // halves, so ping/pong is nothing but a base-pointer swap on the two
-        // windows (set_bottom_tensor_view_data_ptr, one scalar select per
-        // iteration) -- no second descriptor, no second window, no extra
-        // address math in the ds_read stream.
+        // Both K buffers share one descriptor; the ping/pong only swaps the
+        // windows' base pointer.
         KDataType* const k_smem_buf0 =
             reinterpret_cast<KDataType*>(static_cast<char*>(smem_arena) + Layout::kK0Offset);
         KDataType* const k_smem_buf1 =
@@ -861,9 +820,7 @@ struct BlockFmhaPipelineQRKSVSTdm
                              {0, 0},
                              Policy::template MakeKRegTileDistribution<Problem>());
 
-        // Issue K's transfer now, while Q's is still in flight. K owns its own
-        // LDS region, so nothing has to be drained or synchronised first; the
-        // two HBM round trips overlap instead of running back-to-back.
+        // issued while Q is still in flight
         load_tile_tdm(tdm_config_k, k_lds_write_window, k_dram_window);
 
         // S tile in LDS
@@ -878,9 +835,7 @@ struct BlockFmhaPipelineQRKSVSTdm
                              {0, 0},
                              Policy::template MakeSRegTileDistribution<Problem>());
 
-        // V tile in LDS: loaded via load_tile_tdm (same TDM machinery as Q/K),
-        // with V's DRAM dist switched to trivial tile-major and the V LDS read
-        // view kept plain row-major (matches the write view).
+        // V tile in LDS
         auto v_dram_window =
             make_tile_window(v_dram_block_window_tmp,
                              {kv_load_start, 0},
@@ -889,12 +844,7 @@ struct BlockFmhaPipelineQRKSVSTdm
         auto v_lds_write_view = make_tensor_view<address_space_enum::lds>(
             reinterpret_cast<VDataType*>(static_cast<char*>(smem_arena) + Layout::kV0Offset),
             Policy::template MakeVLdsBlockDescriptor<Problem>());
-        // V LDS read view uses the same plain row-major desc as the write
-        // view (Xor=false). This matches the TDM box-major writer (single
-        // plain box per V tile) and lets the existing MakeVRegTileDistribution
-        // outer-dist + QuadInputEncoding suffix (TransposedDstrEncode) drive
-        // ds_load_tr_b128 with per-lane VOFFSETs that satisfy the WMMA B
-        // operand expected pattern.
+        // read back with ds_load_tr through the same row-major descriptor
         auto v_lds_read_view = make_tensor_view<address_space_enum::lds>(
             reinterpret_cast<VDataType*>(static_cast<char*>(smem_arena) + Layout::kV0Offset),
             Policy::template MakeVLdsBlockDescriptor<Problem>());
@@ -909,8 +859,7 @@ struct BlockFmhaPipelineQRKSVSTdm
                              {0, 0},
                              Policy::template MakeVRegTileDistribution<Problem>());
 
-        // Retire Q only; K stays in flight (tensorcnt retires in order, and K
-        // was issued after Q).
+        // retire Q only; K, issued after it, stays in flight
         s_wait_tensorcnt_barrier<1>();
         auto q_tile = load_tile(q_lds_read_window);
 
@@ -927,47 +876,25 @@ struct BlockFmhaPipelineQRKSVSTdm
 
         do
         {
-            // K ping/pong. The prologue TDM above filled buffer 0, so trip i
-            // reads buffer (i & 1) and stages trip i+1 into the other one.
-            // Both are uniform, so this is a pair of s_cselect_b64, not VALU.
+            // trip i reads K buffer (i & 1) and stages trip i+1 into the other
             const bool k_buf_is_even     = ((i_total_loops & 1) == 0);
             KDataType* const k_read_ptr  = k_buf_is_even ? k_smem_buf0 : k_smem_buf1;
             KDataType* const k_write_ptr = k_buf_is_even ? k_smem_buf1 : k_smem_buf0;
 
-            // One barrier, two jobs: the write-after-read guard for V (the V
-            // TDM just below overwrites the region last trip's gemm_1 read,
-            // and on the first trip the region Q was read from), and the wait
-            // for this trip's K. At the top of trip i the only TDM in flight
-            // is K_i: V_{i-1} was retired by the <1> in front of gemm_1, and
-            // K_i was issued mid-body of trip i-1, so it has had a full
-            // gemm_0 + softmax + gemm_1 to land.
-            //
-            // The count MUST be <0>, not <1>: V is not yet on the counter, so
-            // <1> would retire nothing and gemm_0 would read a half-written K
-            // tile. The LDS reads are drained too (dscnt 0): Q
-            // aliases V, and on the first trip the Q ds_loads may still be in
-            // flight when another wave issues the V TDM below. Later trips have
-            // nothing outstanding here (gemm_1 consumed every V read).
+            // One barrier for two hazards: the V transfer below overwrites what
+            // the last trip's gemm_1 (or, on the first trip, the Q load) read,
+            // and gemm_0 needs this trip's K. The only TDM in flight here is
+            // K_i, so the count is <0>; dscnt 0 also retires the Q reads.
             s_wait_tensorcnt_barrier<0, 0>();
 
-            // V uses load_tile_tdm (single-box plain LDS write). Both K and V
-            // are on the tensorcnt counter (s_wait_tensorcnt_barrier for sync).
             load_tile_tdm(tdm_config_v, v_lds_write_window, v_dram_window);
             move_tile_window(v_dram_window, {kN0, 0});
 
             // STAGE 1, QK gemm
             clear_tile(s_acc); // initialize C
 
-            // The whole (kN0 x kSubQKHeaddim) K tile is already staged by the
-            // single TDM issued before the loop body, so the kK0 slices are
-            // walked entirely inside LDS: one drain up front, then just a
-            // read-window slide per step. No per-slice TDM, barrier or drain.
-            //
-            // That drain is the merged barrier at the top of the body, so
-            // there is nothing to wait for here. V is still in flight and
-            // stays in flight underneath this whole gemm -- it is retired by
-            // the <1> in front of gemm_1, which is what keeps the V prefetch
-            // asynchronous instead of collapsing it into a synchronous copy.
+            // K is whole in LDS; the kK0 slices are walked by the read window.
+            // V stays in flight under this gemm until the wait before gemm_1.
             k_lds_read_window.set_bottom_tensor_view_data_ptr(k_read_ptr);
             auto k_tile = load_tile(k_lds_read_window);
 
@@ -996,14 +923,9 @@ struct BlockFmhaPipelineQRKSVSTdm
                                   sequence<kM0, k0_loops * kK0>{}),
                    k_tile);
 
-            // Left alone, the scheduler drops a full s_wait_dscnt in front of
-            // every v_wmma, so the N-subtiles of a kK0 slice run strictly one
-            // after another with no LDS read in flight. Ask for two
-            // ds_load_b128 per WMMA instead, which keeps a read in flight
-            // without pinning a deep buffer (and the VGPR count, hence the
-            // occupancy, where it is). The surrounding barriers fence this
-            // region off from the V-side ds_load_tr, so only K's reads land in
-            // these groups.
+            // Two K reads per WMMA keep an LDS read in flight without a deep
+            // register buffer; left alone the scheduler waits on dscnt before
+            // every WMMA.
             static_for<0, k0_loops, 1>{}([&](auto) {
                 __builtin_amdgcn_sched_group_barrier(0x100, 2, 0); // DS read
                 __builtin_amdgcn_sched_group_barrier(0x008, 1, 0); // WMMA
@@ -1112,15 +1034,9 @@ struct BlockFmhaPipelineQRKSVSTdm
             move_tile_window(k_dram_window, {kN0, 0});
             move_tile_window(bias_dram_window, {0, kN0});
 
-            // Issued on the final trip too: K(num_total_loop) is read by
-            // nobody and retired by the drain after the loop, but the <1> in
-            // front of gemm_1 relies on it being on the counter behind V (see
-            // there), and a guard would only add a uniform branch per trip
-            // (measured slower).
-            //
-            // No barrier in front of this issue: it writes the K buffer
-            // nobody reads this trip, so there is no anti-dependency on the
-            // QK gemm above.
+            // Next K, into the buffer nobody reads this trip, so no barrier.
+            // Issued on the last trip too: the wait before gemm_1 counts on it
+            // being behind V on the counter.
             k_lds_write_window.set_bottom_tensor_view_data_ptr(k_write_ptr);
             load_tile_tdm(tdm_config_k, k_lds_write_window, k_dram_window);
 
@@ -1183,23 +1099,11 @@ struct BlockFmhaPipelineQRKSVSTdm
 
             constexpr auto o_spans = decltype(o_acc)::get_distributed_spans();
 
-            // FA4-style lazy rebasing. Classic online softmax renormalises
-            // o_acc against the running row max on every iteration, which
-            // at kM0=64 / d=128 costs one v_pk_mul per accumulator pair --
-            // 32 of them per step, on the critical path, in a main loop
-            // that gfx1250 already runs VALU-bound. Instead keep o_acc and
-            // l normalised to m_base and let exp2() absorb the drift for
-            // free: p is then at most 2^kRebaseThreshold, which bf16 and
-            // the fp32 accumulators swallow without losing a mantissa bit.
-            // Only a row that outgrows the threshold pays the rescale, and
-            // the predicate is uniform inside a row group (m is already
-            // cross-lane reduced), so the branch skips whole waves once
-            // the max settles -- typically after the first tile or two.
-            // The gap is taken on the raw maxima: a row whose m_base is still
-            // -inf (nothing unmasked yet) always rebases, and a row that is
-            // still fully masked (both -inf, NaN gap) never does. Taking it on
-            // the validated maxima instead (-inf -> 0) would keep such a row on
-            // m_base = 0 and let p underflow, or scale l / o_acc by inf.
+            // Lazy rebasing: o_acc and l stay normalised to m_base, and are
+            // rescaled only when a row max outgrows it by more than
+            // kRebaseThreshold (p then stays below 2^kRebaseThreshold). The gap
+            // uses the raw maxima: a row whose m_base is -inf always rebases, a
+            // fully masked row (NaN gap) never does.
             constexpr auto kRebaseThreshold = SMPLComputeDataType{8}; // 256x
             const auto row_gap              = [&](auto i_idx) {
                 if constexpr(BiasEnum == BlockAttentionBiasEnum::ELEMENTWISE_BIAS ||
@@ -1256,19 +1160,14 @@ struct BlockFmhaPipelineQRKSVSTdm
             [[maybe_unused]] int32_t p_scale = 0;
             auto p_tile                      = MakePForGemm1<decltype(gemm_1)>(p_compute, p_scale);
 
-            // l{j}. o_acc needs no rescale here -- it is already in the
-            // m_base frame that p was just built in.
-            // The matrix-unit row sum needs one warp tile of columns to span
-            // the whole reduction, which only holds when the gemm_1 warps are
-            // all on M. A tile that spends its warps on N (the short-query
-            // tiles do) has to keep the fp32 tree.
+            // l{j}; o_acc is already in p's m_base frame. The matrix-unit row
+            // sum needs the gemm_1 warps all on M.
             constexpr bool kRowSumOnMatrixUnit =
                 BlockFmhaShape::Gemm1BlockWarps::at(number<1>{}) == 1;
 
             if constexpr(kStoreLSE || !kRowSumOnMatrixUnit)
             {
-                // LSE is consumed downstream in fp32, so keep the fp32 tree
-                // rather than summing the bf16 P the matrix unit would see.
+                // the LSE takes the fp32 sum, not the 16-bit P
                 auto rowsum_p = BlockRowSum(p_compute); // rowsum(Pcompute{j})
                 sweep_tile_span(o_spans[I0], [&](auto idx0) {
                     constexpr auto i_idx = make_tuple(idx0);
@@ -1280,15 +1179,8 @@ struct BlockFmhaPipelineQRKSVSTdm
                 AccumulateRowSumOnMatrixUnit(l, p_tile);
             }
 
-            // V is on the tensorcnt counter (load_tile_tdm). Wait for V TDM
-            // write to fully commit before ds_load_tr reads. Mirror image of
-            // the QK drain: in flight are V (needed now) and the next tile's
-            // K (issued above, not needed until the next iteration), so <1>
-            // retires V and lets K keep running under the PV gemm. This is why
-            // the K issue above must stay unconditional: drop it on the final
-            // trip and V becomes the only thing on the counter, <1> is
-            // satisfied without waiting, and the gemm below reads a
-            // half-written V tile.
+            // In flight: V, then the next K. <1> retires V and leaves K running
+            // under the PV gemm.
             s_wait_tensorcnt_barrier<1>();
 
             auto v_tile = load_tile_transpose(v_lds_read_window);
@@ -1316,9 +1208,7 @@ struct BlockFmhaPipelineQRKSVSTdm
                                   sequence<kM0, k1_loops * kK1>{}),
                    v_tile);
 
-            // Same register argument as the QK hint above, applied to the PV
-            // side: two ds_load_tr16_b128 per WMMA keeps one read in flight
-            // without letting the scheduler hoist a deep V buffer.
+            // two V reads per WMMA, as for K above
             using Gemm1T = remove_cvref_t<decltype(gemm_1)>;
             static_for<0, Gemm1T::MIterPerWarp * Gemm1T::NIterPerWarp * k1_loops, 1>{}([&](auto) {
                 __builtin_amdgcn_sched_group_barrier(0x100, 2, 0); // DS read
@@ -1327,9 +1217,7 @@ struct BlockFmhaPipelineQRKSVSTdm
 
         } while(++i_total_loops < num_total_loop);
 
-        // The loop body issues one K tile past the last one it consumes, and
-        // the drains inside the body stop at 1, so that K is still in flight
-        // here. Retire it before leaving the loop nest.
+        // retire the K tile issued past the last one consumed
         s_wait_tensorcnt<0>();
 
         if constexpr(kStoreLSE)
@@ -1338,10 +1226,8 @@ struct BlockFmhaPipelineQRKSVSTdm
             auto lse_acc = make_static_distributed_tensor<LSEDataType>(m.get_tile_distribution());
 
             constexpr auto lse_acc_spans = decltype(lse_acc)::get_distributed_spans();
-            // l is normalised to m_base, not to the running max m. Under a
-            // mask/bias the loop builds p against the validated m_base (-inf
-            // -> 0), and a row whose max never outgrows kRebaseThreshold keeps
-            // m_base at -inf, so validate it the same way here.
+            // l is normalised to m_base, validated as in the loop (a fully
+            // masked row keeps m_base at -inf)
             sweep_tile_span(lse_acc_spans[I0], [&, m_ = m_base, l_ = l](auto idx0) {
                 constexpr auto i_idx = make_tuple(idx0);
                 auto m_row           = m_[i_idx];

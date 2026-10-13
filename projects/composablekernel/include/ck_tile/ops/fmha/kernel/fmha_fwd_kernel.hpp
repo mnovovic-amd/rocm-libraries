@@ -155,11 +155,10 @@ static inline constexpr bool uses_fixed_segmented_lds_arena_v = []() {
         return false;
 }();
 
-// A helper struct for detecting kUsesSmem, i.e. an epilogue whose operator()
-// takes a 4th (smem) argument. Probing the 4-argument call instead would be
-// wrong: Default2DEpilogue declares a defaulted `void*` 4th parameter, so an
-// arity probe matches it too. GetSmemSize() != 0 would be wrong as well:
-// DynamicQuantEpilogue reserves LDS internally and still takes 3 arguments.
+// Whether an epilogue takes the kernel's LDS as a 4th operator() argument
+// (kUsesSmem). An arity probe would also match Default2DEpilogue's defaulted
+// `void*` parameter, and GetSmemSize() != 0 would match DynamicQuantEpilogue,
+// which reserves its own LDS.
 template <typename Epilogue, typename = void>
 struct epilogue_uses_smem : std::false_type
 {
@@ -3488,14 +3487,14 @@ struct FmhaFwdKernel
                     return FmhaPipeline{}(static_cast<decltype(args)&&>(args)...);
             };
 
-            // Hoisted so the epilogue can reuse the pipeline's now-dead LDS. The
-            // non-arena PrefillCase and the fixed segmented arena bring their own
-            // arrays and declare no shared block here.
-            constexpr bool kOwnsLds =
+            // Declared here so the epilogue can reuse the pipeline's LDS. The
+            // non-arena prefill pipelines and the fixed segmented arena declare
+            // their own arrays.
+            constexpr bool kPipelineDeclaresLds =
                 PrefillCase &&
                 (kUsesFixedSegmentedLdsArena || !detail::uses_qr_tdm_lds_arena_v<FmhaPipeline>);
             char* smem_ptr = nullptr;
-            if constexpr(!kOwnsLds)
+            if constexpr(!kPipelineDeclaresLds)
             {
                 alignas(256) __shared__ char smem[GetSmemSize()];
                 smem_ptr = smem;
@@ -3609,10 +3608,9 @@ struct FmhaFwdKernel
 
             if constexpr(detail::epilogue_uses_smem_v<EpiloguePipeline>)
             {
-                // The pipeline's LDS is dead by now: shuffle through it for
-                // coalescing. Only separately declared double-buffer arrays
-                // have no single block to hand over -> direct store.
-                if constexpr(kOwnsLds)
+                // The pipeline is done with its LDS; pipelines that declare
+                // their own arrays leave none to the epilogue (direct store).
+                if constexpr(kPipelineDeclaresLds)
                     EpiloguePipeline{}(o_dram_window, o_acc_tile, nullptr, nullptr);
                 else
                     EpiloguePipeline{}(o_dram_window, o_acc_tile, nullptr, smem_ptr);
