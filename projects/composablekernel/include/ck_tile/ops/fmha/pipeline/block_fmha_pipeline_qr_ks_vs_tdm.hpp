@@ -771,13 +771,10 @@ struct BlockFmhaPipelineQRKSVSTdm
         // Q LDS writer (TDM) and reader share plain row-major desc; TDM
         // box-major write cannot produce XOR'd layout, so no swizzle here.
         //
-        // Q shares V's region, and deliberately not K's. Aliasing Q with K
-        // forced the K transfer to wait until Q had both landed and been
-        // drained into registers, putting two full HBM round trips
-        // back-to-back on every workgroup's critical path. Sitting on V costs
-        // nothing instead: K has its own region, so its transfer is issued
-        // immediately after Q's and the two overlap, and only Q is drained
-        // before the register read (s_wait_tensorcnt_barrier<1>).
+        // Q shares V's region, not K's: K then has its own region, so its
+        // transfer is issued right behind Q's and the two HBM round trips
+        // overlap; only Q is drained before the register read
+        // (s_wait_tensorcnt_barrier<1>).
         //
         // Safety: Q's *only* LDS read is the load_tile below the V window
         // setup, before the do-loop. V's first write is the first statement
@@ -897,8 +894,7 @@ struct BlockFmhaPipelineQRKSVSTdm
         // plain box per V tile) and lets the existing MakeVRegTileDistribution
         // outer-dist + QuadInputEncoding suffix (TransposedDstrEncode) drive
         // ds_load_tr_b128 with per-lane VOFFSETs that satisfy the WMMA B
-        // operand expected pattern. Verified end-to-end on ABC + multi-stride
-        // GQA + d-sweep (d <= 128).
+        // operand expected pattern.
         auto v_lds_read_view = make_tensor_view<address_space_enum::lds>(
             reinterpret_cast<VDataType*>(static_cast<char*>(smem_arena) + Layout::kV0Offset),
             Policy::template MakeVLdsBlockDescriptor<Problem>());
@@ -938,24 +934,17 @@ struct BlockFmhaPipelineQRKSVSTdm
             KDataType* const k_read_ptr  = k_buf_is_even ? k_smem_buf0 : k_smem_buf1;
             KDataType* const k_write_ptr = k_buf_is_even ? k_smem_buf1 : k_smem_buf0;
 
-            // One barrier, two jobs. This used to be two: a plain
-            // block_sync_lds here (write-after-read -- the V TDM just below
-            // overwrites the region last trip's gemm_1 read, and on the first
-            // trip the region Q was read from) and a separate
-            // s_wait_tensorcnt_barrier<1> further down, waiting for this
-            // trip's K to land.
+            // One barrier, two jobs: the write-after-read guard for V (the V
+            // TDM just below overwrites the region last trip's gemm_1 read,
+            // and on the first trip the region Q was read from), and the wait
+            // for this trip's K. At the top of trip i the only TDM in flight
+            // is K_i: V_{i-1} was retired by the <1> in front of gemm_1, and
+            // K_i was issued mid-body of trip i-1, so it has had a full
+            // gemm_0 + softmax + gemm_1 to land.
             //
-            // They merge because at the top of trip i the only TDM in flight
-            // is K_i. V_{i-1} was issued at this very point last trip and
-            // retired by the <1> in front of gemm_1; K_i was issued mid-body
-            // of trip i-1. So the <0> here is *exactly* the <1> that used to
-            // sit below -- same tile, same wait -- and hoisting it above the V
-            // issue is free, because K_i has had a full gemm_0 + softmax +
-            // gemm_1 to land.
-            //
-            // The count MUST be <0>, not <1>: after the hoist V is not yet on
-            // the counter, so <1> would retire nothing and gemm_0 would read a
-            // half-written K tile. The LDS reads are drained too (dscnt 0): Q
+            // The count MUST be <0>, not <1>: V is not yet on the counter, so
+            // <1> would retire nothing and gemm_0 would read a half-written K
+            // tile. The LDS reads are drained too (dscnt 0): Q
             // aliases V, and on the first trip the Q ds_loads may still be in
             // flight when another wave issues the V TDM below. Later trips have
             // nothing outstanding here (gemm_1 consumed every V read).
@@ -1020,7 +1009,7 @@ struct BlockFmhaPipelineQRKSVSTdm
                 __builtin_amdgcn_sched_group_barrier(0x008, 1, 0); // WMMA
             });
 
-            // STAGE 2: scale_s, add bias (mirrors baseline qr_ks_vs line 715-776)
+            // STAGE 2: scale_s, add bias (as in run_single_kv_lds_buffer)
             if constexpr(BiasEnum == BlockAttentionBiasEnum::ELEMENTWISE_BIAS)
             {
                 // Pre-scale s_acc by scale_s before adding bias
@@ -1123,29 +1112,15 @@ struct BlockFmhaPipelineQRKSVSTdm
             move_tile_window(k_dram_window, {kN0, 0});
             move_tile_window(bias_dram_window, {0, kN0});
 
-            // Do NOT try to skip this on the final trip. K(num_total_loop) is
-            // read by nobody and the drain at the bottom of the pipeline has
-            // to retire it, so guarding the issue with
-            // `i_total_loops + 1 < num_total_loop` looks free. Measured: it is
-            // 0.4-4% SLOWER on all four d128/bf16 batch shapes (232/232
-            // 0.182 -> 0.185, 8/232 0.049 -> 0.051). Workgroups finish
-            // staggered, so the tail drain is already covered by the WGs still
-            // in their loops; all the guard buys is a uniform branch per trip
-            // and two extra basic blocks for the scheduler to clump against.
+            // Issued on the final trip too: K(num_total_loop) is read by
+            // nobody and retired by the drain after the loop, but the <1> in
+            // front of gemm_1 relies on it being on the counter behind V (see
+            // there), and a guard would only add a uniform branch per trip
+            // (measured slower).
             //
-            // No barrier in front of this issue. It used to need one: with a
-            // single K buffer this TDM overwrote the exact tile the QK gemm
-            // above had just finished reading, so every wave had to be proven
-            // done first (block_sync_lds = s_wait_dscnt 0 + s_barrier). With
-            // ping/pong it writes the buffer nobody is reading this trip, the
-            // anti-dependency is gone, and the barrier goes with it. That is
-            // worth roughly 0.55% at 232/232 and 1.6% at 532/532, measured by
-            // ablation -- barriers cost accumulated cross-wave drift, not just
-            // their issue slot.
-            //
-            // The tensorcnt bookkeeping is untouched: K' is still issued here,
-            // still after this trip's V, so the <1> drains below still retire
-            // exactly what they used to.
+            // No barrier in front of this issue: it writes the K buffer
+            // nobody reads this trip, so there is no anti-dependency on the
+            // QK gemm above.
             k_lds_write_window.set_bottom_tensor_view_data_ptr(k_write_ptr);
             load_tile_tdm(tdm_config_k, k_lds_write_window, k_dram_window);
 
@@ -1353,8 +1328,8 @@ struct BlockFmhaPipelineQRKSVSTdm
         } while(++i_total_loops < num_total_loop);
 
         // The loop body issues one K tile past the last one it consumes, and
-        // the drains inside the body now stop at 1, so that speculative K is
-        // still in flight here. Retire it before leaving the loop nest.
+        // the drains inside the body stop at 1, so that K is still in flight
+        // here. Retire it before leaving the loop nest.
         s_wait_tensorcnt<0>();
 
         if constexpr(kStoreLSE)

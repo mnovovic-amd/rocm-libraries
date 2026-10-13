@@ -141,12 +141,12 @@ struct LdsShuffle2DEpilogue
     // its value: a caller with no spare LDS passes the `nullptr` literal
     // (std::nullptr_t) and gets the direct-store fallback, everyone else passes
     // a real pointer. A runtime `p_smem == nullptr` test here would make the
-    // compiler emit both paths -- the dead one still participates in register
-    // allocation, which on the gfx1250 FMHA kernel is 156 wasted instructions.
+    // compiler emit both paths, and the dead one still takes part in register
+    // allocation.
     //
     // The parameter is defaulted so that this epilogue stays substitutable for
-    // Default2DEpilogue at the eleven existing three-argument call sites; those
-    // keep the direct store, which is correct, just not coalesced.
+    // Default2DEpilogue at the existing three-argument call sites; those keep
+    // the direct store, which is correct, just not coalesced.
     template <typename ODramWindowTmp,
               typename OAccTile,
               typename DsDramWindows,

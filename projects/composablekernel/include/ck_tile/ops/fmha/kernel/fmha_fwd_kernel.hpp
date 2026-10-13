@@ -3568,9 +3568,8 @@ struct FmhaFwdKernel
                 }
                 else
                 {
-                    // Both the arena pipeline and the single-buffer ones take
-                    // exactly one LDS block here, and it is now the hoisted
-                    // smem_ptr, so the two cases have collapsed into one.
+                    // The arena pipeline and the single-buffer ones both take
+                    // one LDS block here: the hoisted smem_ptr.
                     return invoke_fmha_pipeline(q_dram_window,
                                                 k_dram_window,
                                                 v_dram_window,

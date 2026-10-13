@@ -303,6 +303,7 @@ FMHA_FWD_API_KVSCALE_LOOKUP = """    struct row {{ const char* arch; const char*
 FMHA_FWD_API_KVSCALE_ROW = """        {{"{F_arch.name}", "{F_dtype_name}", {F_hdim}, {F_hdim_v}, fmha_fwd_kvscale_align_<{F_trait_type}, {F_arch.tag}>()}},
 """
 
+
 @dataclass
 class CppConstraint:
     bool_expr: str = None
@@ -1576,7 +1577,9 @@ GFX125_QR_TDM_BM0_CROSSOVER_MAX_SEQLEN_Q = {
 GFX125_D192_N128_MIN_AVERAGE_K = 512
 
 
-# d128 fp16/bf16: finite windows keep bm0=64 up to 2048 rows (bm0=128 is 25-50% slower).
+# d128 fp16/bf16: finite windows keep bm0=64 up to 2048 rows (bm0=128 is 25-50%
+# slower). From 1024 rows this only reaches the windows qr_tdm_sched does not
+# take, e.g. with a sink or a bias.
 GFX125_QR_TDM_D128_WINDOWED_MASK = (
     "t.mask_type != mask_enum::no_mask"
     " && !(a.window_size_left < 0 && a.window_size_right == 0)"
@@ -1732,20 +1735,27 @@ class KernelComponentFactoryGfx125(CompatibilityRuleFactory):
             # buffer body, the others the K ping/pong body; at bm0=64 only the _o2
             # tile carries causal kernels. The _o2 tile is qr_tdm's alone.
             if problem_ctx.dtype not in cls._DT_FP16_BF16 or (
-                problem_ctx.hdim, problem_ctx.hdim_v
+                problem_ctx.hdim,
+                problem_ctx.hdim_v,
             ) != (128, 128):
                 return True
             tile, pipeline = kernel_ctx.tile, kernel_ctx.pipeline
             o2 = tile.F_bm0 == 64 and tile.F_occupancy != -1
             if pipeline.tag != "qr_tdm":
                 return not o2
-            if (pipeline.F_use_double_kv_lds_buffer == "t") != (tile.F_bm0 == 128 or o2):
+            if (pipeline.F_use_double_kv_lds_buffer == "t") != (
+                tile.F_bm0 == 128 or o2
+            ):
                 return False
             return tile.F_bm0 != 64 or (pipeline.F_mask == "causal") == o2
 
         # The sched rule stays last (its tests address it as get_rules()[-1]).
         rules.extend(
-            [check_gemm0_k, check_qr_tdm_kv_lds_buffering, check_qr_tdm_sched_codegen_compatibility]
+            [
+                check_gemm0_k,
+                check_qr_tdm_kv_lds_buffering,
+                check_qr_tdm_sched_codegen_compatibility,
+            ]
         )
         return rules
 
@@ -1901,7 +1911,9 @@ class KernelComponentFactoryGfx125(CompatibilityRuleFactory):
                 # Finite virtual-sink logits retain the existing qr_tdm fallback.
                 # qr_tdm_sched takes over at qr_tdm's bm0 crossover: below it d128's
                 # bm0=64 K ping/pong tile is 1.1x-1.8x faster than qr_tdm_sched.
-                sched_min_seqlen_q = GFX125_QR_TDM_BM0_CROSSOVER_MAX_SEQLEN_Q[(hdim, hdim_v)]
+                sched_min_seqlen_q = GFX125_QR_TDM_BM0_CROSSOVER_MAX_SEQLEN_Q[
+                    (hdim, hdim_v)
+                ]
                 sched_constraint = CppConstraint(
                     f"a.hdim_q == {hdim} && "
                     f"a.hdim_v == {hdim_v} && a.sink_ptr == nullptr && "

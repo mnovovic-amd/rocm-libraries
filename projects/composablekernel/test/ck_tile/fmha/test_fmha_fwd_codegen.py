@@ -1869,6 +1869,110 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
             )
             self.assertEqual(dispatch.run(group=group, hdim_q=128), [fallback])
 
+    def test_d128_qr_tdm_tiles_and_lds_bodies(self):
+        # d128 fp16/bf16 qr_tdm: bm0=128 and the _o2 bm0=64 tile run the double
+        # K/V buffer body, the plain bm0=64 tile the K ping/pong body; at bm0=64
+        # only the _o2 tile carries causal kernels. Only the K ping/pong kernels
+        # serve any seqlen_k from their unpadded instance.
+        _, kernels = get_fwd_blobs(
+            ["gfx1250"], _SUPPORTED_DISPATCH_FILTER, 600, [128, 192], "simplified"
+        )
+        seen = set()
+        for kernel in kernels:
+            ping_pong = kernel.api_trait().tdm_k_ping_pong
+            if kernel.F_pipeline.tag != "qr_tdm" or kernel.F_hdim != 128:
+                self.assertFalse(ping_pong, kernel.name)
+                continue
+            tile, pipeline = kernel.F_tile, kernel.F_pipeline
+            double = pipeline.F_use_double_kv_lds_buffer == "t"
+            self.assertEqual(ping_pong, not double, kernel.name)
+            if tile.F_bm0 == 128:
+                self.assertTrue(double, kernel.name)
+            else:
+                self.assertEqual(tile.F_bm0, 64, kernel.name)
+                o2 = tile.F_occupancy != -1
+                self.assertEqual(double, o2, kernel.name)
+                self.assertEqual(pipeline.F_mask == "causal", o2, kernel.name)
+            seen.add((tile.F_bm0, tile.F_occupancy, double))
+        self.assertEqual(seen, {(128, -1, True), (64, 2, True), (64, -1, False)})
+
+    def test_d128_k_ping_pong_dispatch(self):
+        pool, kernels = get_fwd_blobs(
+            ["gfx1250"],
+            "fmha_fwd_d128_bf16_*_nlogits*_ndropout*_nskip*_nqscale*_ntrload*",
+            600,
+            [128],
+            "simplified",
+        )
+        dispatch = _CompiledDispatcher(self, pool, kernels)
+
+        def qr_tdm(bm0, double, mask="s_no", skpad="f", bias="no", occupancy=-1):
+            return dispatch.expected_id(
+                hdim=128,
+                mode="batch",
+                pipeline="qr_tdm",
+                bm0=bm0,
+                occupancy=occupancy,
+                use_double_kv_lds_buffer="t" if double else "f",
+                mask=mask,
+                skpad=skpad,
+                dpad="f",
+                bias=bias,
+                lse="f",
+                sink="f",
+            )
+
+        def run(**changes):
+            return dispatch.run(hdim_q=128, hdim_v=128, **changes)
+
+        sched_ids = {
+            index
+            for kernel, index in dispatch.kernel_ids
+            if kernel.F_pipeline.tag == "qr_tdm_sched"
+        }
+        square = dict(seqlen_q=532, seqlen_k=532)
+        causal = dict(mask=1, window_size_left=-1, window_size_right=0)
+        window = dict(mask=1, window_size_left=64, window_size_right=0)
+        big_grid = dict(batch=1280, nhead_q=2, nhead_k=2)
+
+        # The unpadded K ping/pong kernel serves any seqlen_k, but an elementwise
+        # bias still needs a tile multiple.
+        self.assertEqual(run(**square), [qr_tdm(64, False)])
+        self.assertEqual(
+            run(**square, bias=1), [qr_tdm(64, False, skpad="t", bias="bias")]
+        )
+        self.assertEqual(
+            run(seqlen_q=532, seqlen_k=512, bias=1),
+            [qr_tdm(64, False, bias="bias")],
+        )
+        # Causal: grids of <= 2 bm0=128 blocks per CU take the _o2 tile, larger
+        # ones the K ping/pong tile on the simplified mask.
+        self.assertEqual(
+            run(**square, **causal),
+            [qr_tdm(64, True, mask="causal", skpad="t", occupancy=2)],
+        )
+        self.assertEqual(
+            run(**square, **causal, **big_grid), [qr_tdm(64, False, mask="s_mask")]
+        )
+        # From the crossover on, qr_tdm_sched; where it does not apply (a sink),
+        # the bm0=128 tile, except finite windows, which keep bm0=64 below 2048.
+        long = dict(seqlen_q=1024, seqlen_k=1024, batch=64, nhead_q=8, nhead_k=8)
+        self.assertIn(run(**long, **causal)[0], sched_ids)
+        self.assertEqual(
+            run(**long, **causal, has_sink_ptr=1),
+            [qr_tdm(128, True, mask="causal")],
+        )
+        self.assertIn(run(**long, **window)[0], sched_ids)
+        self.assertEqual(
+            run(**long, **window, has_sink_ptr=1), [qr_tdm(64, False, mask="s_mask")]
+        )
+        self.assertEqual(
+            run(
+                **{**long, "seqlen_q": 2048, "seqlen_k": 2048}, **window, has_sink_ptr=1
+            ),
+            [qr_tdm(128, True, mask="s_mask")],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

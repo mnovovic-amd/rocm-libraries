@@ -411,6 +411,89 @@ TEST(TestCkTileFmhaFwd, QrTdmLdsArenaPrefill)
     }
 }
 
+// d128 below the bm0 crossover runs the bm0=64 tile on the K ping/pong body
+// (no "_kvlp_" in the kernel name). Its unpadded instance serves any seqlen_k
+// except with an elementwise bias, and it serves causal masks on the simplified
+// mask; causal grids of at most 2 bm0=128 blocks per CU take the occupancy-2
+// tile on the double K/V buffer body instead (which only has the causal kernels
+// without LSE, bias or sink).
+class QrTdmKPingPong
+    : public TestWithParam<
+          std::tuple<mode_enum, int, int, int, int, const char*, const char*, bool, const char*>>
+{
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    TestCkTileFmhaFwd,
+    QrTdmKPingPong,
+    // mode, batch, nhead, seqlen_q, seqlen_k, mask, bias, lse, kernel name part
+    Values(std::tuple{mode_enum::batch, 2, 4, 64, 64, "0", "n", true, "_npad_"},
+           std::tuple{mode_enum::batch, 2, 4, 333, 1031, "0", "n", true, "_npad_"},
+           std::tuple{mode_enum::batch, 2, 4, 100, 532, "0", "e", true, "_pssk_"},
+           std::tuple{mode_enum::batch, 2, 4, 100, 512, "0", "e", true, "_npad_"},
+           std::tuple{mode_enum::batch, 2, 4, 100, 532, "1", "a", true, "_nkvlp_"},
+           std::tuple{mode_enum::batch, 2, 4, 232, 232, "t:50,64", "n", true, "_nkvlp_"},
+           std::tuple{mode_enum::batch, 2, 4, 532, 532, "2", "n", false, "_o2_"},
+           std::tuple{mode_enum::batch, 96, 8, 100, 100, "2", "n", false, "_nkvlp_"},
+           std::tuple{mode_enum::group, 2, 4, 333, 1031, "2", "n", true, "_qr_tdm_"}));
+
+TEST_P(QrTdmKPingPong, DataTypeConfig)
+{
+    if constexpr(ck_tile::is_any_of<DataTypeConfig, FmhaFwdFp16, FmhaFwdBf16>::value)
+    {
+        if(!ck_tile::is_gfx125_supported())
+            GTEST_SKIP() << "qr_tdm is only supported on gfx1250";
+
+        auto [mode, batch, nhead, seqlen_q, seqlen_k, mask_str, bias_str, lse, tag] = GetParam();
+
+        std::string selected_kernel;
+        auto result = fmha_fwd_run<DataTypeConfig>(mode,
+                                                   batch,
+                                                   nhead,
+                                                   -1,
+                                                   {seqlen_q},
+                                                   {seqlen_k},
+                                                   128,
+                                                   128,
+                                                   0,
+                                                   {-1},
+                                                   {-1},
+                                                   {},
+                                                   {},
+                                                   0,
+                                                   false,
+                                                   false,
+                                                   0,
+                                                   0,
+                                                   true,
+                                                   lse,
+                                                   0,
+                                                   false,
+                                                   bias_str,
+                                                   0.0f,
+                                                   0,
+                                                   0,
+                                                   false,
+                                                   mask_str,
+                                                   qscale_str,
+                                                   true,
+                                                   1,
+                                                   COMMON_ARGS,
+                                                   std::nullopt,
+                                                   &selected_kernel);
+        ASSERT_EQ(result, fwd_result::success);
+        EXPECT_NE(selected_kernel.find("_qr_tdm_"), std::string::npos) << selected_kernel;
+        // Group mode dispatches on the packed total q length (see QrTdmNewHeadDim).
+        if(mode == mode_enum::batch)
+        {
+            EXPECT_NE(selected_kernel.find("_b64x"), std::string::npos) << selected_kernel;
+            EXPECT_NE(selected_kernel.find(tag), std::string::npos) << selected_kernel;
+            if(std::string_view{tag} != "_o2_")
+                EXPECT_NE(selected_kernel.find("_nkvlp_"), std::string::npos) << selected_kernel;
+        }
+    }
+}
+
 // gfx125x-only: qr_tdm correctness at the head dims this PR added but that the
 // generic General sweep does not cover -- (160,160) and (96,96). The generic
 // suite already exercises 32/64/128/192-128 through qr_tdm but never asserts
