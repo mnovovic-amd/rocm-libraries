@@ -1757,8 +1757,9 @@ class KernelComponentFactoryGfx125(CompatibilityRuleFactory):
                     return False
             return use_double == (kernel_ctx.tile.F_bm0 == 128)
 
+        # The sched rule stays last (its tests address it as get_rules()[-1]).
         rules.extend(
-            [check_gemm0_k, check_qr_tdm_sched_codegen_compatibility, check_qr_tdm_kv_lds_buffering]
+            [check_gemm0_k, check_qr_tdm_kv_lds_buffering, check_qr_tdm_sched_codegen_compatibility]
         )
         return rules
 
@@ -1912,10 +1913,18 @@ class KernelComponentFactoryGfx125(CompatibilityRuleFactory):
 
             if (hdim, hdim_v) in cls._QR_TDM_SCHED_TILES:
                 # Finite virtual-sink logits retain the existing qr_tdm fallback.
+                # d128 keeps its bm0=64 K ping/pong tile below the bm0 crossover,
+                # where it is 1.1x-1.8x faster than the scheduled pipeline (dense
+                # and causal); the scheduled pipeline takes over from there.
+                sched_min_seqlen_q = (
+                    GFX125_QR_TDM_BM0_CROSSOVER_MAX_SEQLEN_Q[(128, 128)]
+                    if (hdim, hdim_v) == (128, 128)
+                    else 128
+                )
                 sched_constraint = CppConstraint(
                     f"a.hdim_q == {hdim} && "
                     f"a.hdim_v == {hdim_v} && a.sink_ptr == nullptr && "
-                    "a.max_seqlen_q >= 128 && "
+                    f"a.max_seqlen_q >= {sched_min_seqlen_q} && "
                     f"t.hdim_q == {hdim} && t.hdim_v == {hdim_v}"
                 )
                 for mask, lse in itertools.product(

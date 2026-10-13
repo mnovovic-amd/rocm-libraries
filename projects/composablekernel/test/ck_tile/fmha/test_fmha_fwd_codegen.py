@@ -59,6 +59,9 @@ _D192_SELECTOR = (
     "a.hdim_q == 192 && a.hdim_v == 128 && a.sink_ptr == nullptr && "
     "a.max_seqlen_q >= 128"
 )
+# Smallest max_seqlen_q that dispatches qr_tdm_sched, per head dim: d128 keeps its
+# bm0=64 K ping/pong qr_tdm tile below the bm0 crossover.
+_SCHED_MIN_Q = {64: 128, 128: 1024, 192: 128}
 
 
 def _generate(receipt, optdim_list=None):
@@ -850,7 +853,11 @@ class TestCompiledGfx125D192Dispatch(unittest.TestCase):
                     )
                     self.assertEqual(
                         dispatch.run(
-                            dtype="fp16", group=group, hdim_q=hdim, seqlen_k=128
+                            dtype="fp16",
+                            group=group,
+                            hdim_q=hdim,
+                            seqlen_q=_SCHED_MIN_Q[hdim],
+                            seqlen_k=128,
                         ),
                         [expected],
                     )
@@ -943,7 +950,7 @@ class TestCompiledGfx125D192Dispatch(unittest.TestCase):
             ]
         )
         for mode, group in (("batch", 0), ("group", 1)):
-            for length, bm0 in ((1, 64), (127, 64), (128, 64), (2047, 64), (2048, 128)):
+            for length, bm0 in ((1, 64), (127, 64), (128, 64), (1023, 64), (1024, 128)):
                 expected = dispatch.expected_id(
                     mode=mode,
                     hdim=128,
@@ -956,7 +963,7 @@ class TestCompiledGfx125D192Dispatch(unittest.TestCase):
                     dpad="f",
                 )
                 selected = expected
-                if length >= 128:
+                if length >= _SCHED_MIN_Q[128]:
                     selected = dispatch.expected_id(
                         mode=mode,
                         hdim=128,
@@ -1294,7 +1301,7 @@ class TestGfx125V128Codegen(unittest.TestCase):
             self.assertIn("QRKSVS_TDM_SCHED", kernel.render())
         api = pool.render("test")
         self.assertIn("a.hdim_q == 128", api)
-        self.assertIn("a.max_seqlen_q >= 128", api)
+        self.assertIn(f"a.max_seqlen_q >= {_SCHED_MIN_Q[128]}", api)
 
     def test_family_padding_matches_validated_specializations(self):
         kernels = []
@@ -1624,7 +1631,9 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
                 sink="f",
             )
             candidate = dispatch.expected_id(pipeline="qr_tdm_sched", **features)
-            args = dict(hdim_q=128, group=0, mask=mask, lse=lse)
+            args = dict(
+                hdim_q=128, group=0, mask=mask, lse=lse, seqlen_q=_SCHED_MIN_Q[128]
+            )
             self.assertEqual(dispatch.run(**args), [candidate])
 
     def test_group_max_q_is_independent_of_member_length_and_head_ratio(self):
@@ -1650,18 +1659,19 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
                     bn0=64 if dim == 192 else 128,
                     **features,
                 )
+                q0 = _SCHED_MIN_Q[dim]
                 for heads, kv_heads in ((1, 1), (8, 8), (8, 2), (8, 1)):
                     for member_q, max_q in (
-                        (0, 128),
-                        (1, 128),
-                        (127, 128),
-                        (128, 128),
-                        (0, 127),
-                        (127, 127),
+                        (0, q0),
+                        (1, q0),
+                        (q0 - 1, q0),
+                        (q0, q0),
+                        (0, q0 - 1),
+                        (q0 - 1, q0 - 1),
                     ):
                         fallback = dispatch.expected_id(
                             hdim=dim,
-                            bm0=64 if max_q < 128 else 128,
+                            bm0=64 if max_q < q0 else 128,
                             pipeline="qr_tdm",
                             dpad="f" if dim == 128 else "t",
                             spad="t",
@@ -1677,7 +1687,7 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
                             nhead_q=heads,
                             nhead_k=kv_heads,
                         )
-                        expected = candidate if max_q >= 128 else fallback
+                        expected = candidate if max_q >= q0 else fallback
                         self.assertEqual(dispatch.run(**args), [expected])
 
     def test_default_dispatch_and_rejected_features(self):
@@ -1715,13 +1725,19 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
                             bn0=64 if dim == 192 else 128,
                             **features,
                         )
-                        args = dict(hdim_q=dim, group=group, mask=mask, lse=lse)
+                        args = dict(
+                            hdim_q=dim,
+                            group=group,
+                            mask=mask,
+                            lse=lse,
+                            seqlen_q=_SCHED_MIN_Q[dim],
+                        )
                         self.assertEqual(dispatch.run(**args), [candidate])
                         sink_fallback = dispatch.run(**args, has_sink_ptr=1)[0]
                         self.assertGreater(sink_fallback, 0)
                         self.assertIn(sink_fallback, fallback_ids)
                         for changes in (
-                            dict(seqlen_q=127),
+                            dict(seqlen_q=_SCHED_MIN_Q[dim] - 1),
                             dict(arg_q=160),
                             dict(arg_v=192),
                             dict(hdim_q=160),
@@ -1773,11 +1789,12 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
                     candidate = dispatch.expected_id(
                         pipeline="qr_tdm_sched", **features
                     )
-                    for size in (1, 127, 128, 129, 2047, 2048, 32768):
+                    q0 = _SCHED_MIN_Q[128]
+                    for size in (1, 127, 128, 129, q0 - 1, q0, 2048, 32768):
                         fallback = dispatch.expected_id(
                             pipeline="qr_tdm",
                             spad="t" if group else "f",
-                            bm0=64 if size < 128 else 128,
+                            bm0=64 if size < q0 else 128,
                             dpad="f",
                             **features,
                         )
@@ -1791,7 +1808,7 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
                         )
                         self.assertEqual(
                             dispatch.run(**args),
-                            [candidate if size >= 128 else fallback],
+                            [candidate if size >= q0 else fallback],
                         )
             candidate = dispatch.expected_id(
                 mode=mode,
@@ -1838,10 +1855,11 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
             filter_fn=lambda trait: trait.pipeline_tag != "qr_tdm_sched",
         )
         for mode, group in (("batch", 0), ("group", 1)):
+            # The default seqlen_q (128) is below the d128 bm0 crossover.
             fallback = dispatch.expected_id(
                 mode=mode,
                 hdim=128,
-                bm0=128,
+                bm0=64,
                 pipeline="qr_tdm",
                 spad="t" if group else "f",
                 mask="s_no",
