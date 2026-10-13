@@ -1557,7 +1557,7 @@ class TestGfx125V128Codegen(unittest.TestCase):
                 self.assertTrue(line.startswith(f"{i}:"))
                 self.assertEqual(
                     "-amdgpu-expert-scheduling-mode" in line,
-                    i in (0, 1, 2, 3, 5, 12, 13),
+                    i in (0, 1, 2, 3, 4, 5, 12, 13),
                 )
                 self.assertNotIn("-wwm-regalloc=fast", line)
 
