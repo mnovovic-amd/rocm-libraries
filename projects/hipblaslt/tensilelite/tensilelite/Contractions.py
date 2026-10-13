@@ -76,12 +76,6 @@ class ProblemType:
                  'useGradient', 'activationType', 'activationArgLength', 'activationComputeDataType', 'activationNoGuard',
                  'sparse', 'f32XdlMathOp', 'supportDeviceUserArguments', 'outputAmaxD', 'swizzleTensorA', 'swizzleTensorB', 'metadataLayout',
                  'mxBlockA', 'mxBlockB', 'mxTypeA', 'mxTypeB', 'mxScaleFormat', 'fusedGemmA2A']
-    # scaleBlockSizeA / scaleZeroPointA / int4EncodingA are deliberately not
-    # serialized: the host matches on the ScaleBlockSizeA / ScaleZeroPointA /
-    # Int4EncodingA predicates instead. Emitting them too would make the library
-    # carry state nothing reads, and checkUsedKeys() (TENSILE_DB bit 0x1000)
-    # reports any key the loader does not map. The attributes stay on the object
-    # for predicate construction and placeholder-library naming.
     @classmethod
     def FromOriginalState(cls, d):
         indices = [None]*d['TotalIndices']
