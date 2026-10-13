@@ -3488,16 +3488,18 @@ struct FmhaFwdKernel
                     return FmhaPipeline{}(static_cast<decltype(args)&&>(args)...);
             };
 
-            // Hoisted so the epilogue can reuse the pipeline's now-dead LDS.
-            // The non-arena PrefillCase and the fixed segmented arena bring their
-            // own arrays; give them 1 byte, and no 256-byte alignment, which would
-            // reserve a whole block. The arena pipeline takes smem_ptr in both
-            // cases.
+            // Hoisted so the epilogue can reuse the pipeline's now-dead LDS. The
+            // non-arena PrefillCase and the fixed segmented arena bring their own
+            // arrays and declare no shared block here.
             constexpr bool kOwnsLds =
                 PrefillCase &&
                 (kUsesFixedSegmentedLdsArena || !detail::uses_qr_tdm_lds_arena_v<FmhaPipeline>);
-            constexpr index_t kSharedBytes = kOwnsLds ? 1 : GetSmemSize();
-            alignas(kOwnsLds ? 16 : 256) __shared__ char smem_ptr[kSharedBytes];
+            char* smem_ptr = nullptr;
+            if constexpr(!kOwnsLds)
+            {
+                alignas(256) __shared__ char smem[GetSmemSize()];
+                smem_ptr = smem;
+            }
 
             auto o_acc_tile = [&]() {
                 if constexpr(PrefillCase)
