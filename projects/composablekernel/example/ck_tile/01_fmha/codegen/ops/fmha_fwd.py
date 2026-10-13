@@ -1728,8 +1728,8 @@ class KernelComponentFactoryGfx125(CompatibilityRuleFactory):
         def check_qr_tdm_kv_lds_buffering(
             problem_ctx: ProblemContext, kernel_ctx: KernelContext
         ) -> bool:
-            # d128 fp16/bf16 qr_tdm: the bm0=128 and _o2 tiles take the double K/V
-            # buffer body, the others the K ping/pong body; at bm0=64 only the _o2
+            # d128 fp16/bf16 qr_tdm: the bm0=16, bm0=128 and _o2 tiles take the double
+            # K/V buffer body, the others the K ping/pong body; at bm0=64 only the _o2
             # tile carries causal kernels. The _o2 tile is qr_tdm's alone.
             if problem_ctx.dtype not in cls._DT_FP16_BF16 or (
                 problem_ctx.hdim,
@@ -1741,16 +1741,27 @@ class KernelComponentFactoryGfx125(CompatibilityRuleFactory):
             if pipeline.tag != "qr_tdm":
                 return not o2
             if (pipeline.F_use_double_kv_lds_buffer == "t") != (
-                tile.F_bm0 == 128 or o2
+                tile.F_bm0 in (16, 128) or o2
             ):
                 return False
             return tile.F_bm0 != 64 or (pipeline.F_mask == "causal") == o2
+
+        def check_short_query_tile(
+            problem_ctx: ProblemContext, kernel_ctx: KernelContext
+        ) -> bool:
+            # The 16-row tile spends its warps on N, which only qr_tdm handles:
+            # qr's gemm_1 slices P along M and cannot form a slice narrower than
+            # one warp tile, so pairing the tile with qr fails to compile.
+            if kernel_ctx.tile.F_bm0 != 16:
+                return True
+            return kernel_ctx.pipeline.tag == "qr_tdm"
 
         # The sched rule stays last (its tests address it as get_rules()[-1]).
         rules.extend(
             [
                 check_gemm0_k,
                 check_qr_tdm_kv_lds_buffering,
+                check_short_query_tile,
                 check_qr_tdm_sched_codegen_compatibility,
             ]
         )
@@ -1774,10 +1785,14 @@ class KernelComponentFactoryGfx125(CompatibilityRuleFactory):
                               FmhaFwdTileSize(128,  64,  32,  64,  32,   64,  4, 1, 1,  4, 1, 1,  16, 16, 32,  16, 16, 32,  -1)],
                 ( 96,  96) : [FmhaFwdTileSize( 64,  64,  32,  96,  32,   96,  4, 1, 1,  4, 1, 1,  16, 16, 32,  16, 16, 32,  -1, _gfx125_qr_tdm_crossover_constraint(( 96,  96))),
                               FmhaFwdTileSize(128,  64,  32,  96,  32,   96,  4, 1, 1,  4, 1, 1,  16, 16, 32,  16, 16, 32,  -1)],
+                # Short query (s_q <= 16): the 64-row tile would idle 3/4 of its M
+                # rows, so this tile spends its four warps on N instead (1,4,1).
+                # Listed first: dispatch takes the first tile whose constraint holds.
+                (128, 128) : [FmhaFwdTileSize( 16,  64,  32, 128,  32,  128,  1, 4, 1,  1, 4, 1,  16, 16, 32,  16, 16, 32,  -1, CppConstraint("a.max_seqlen_q <= 16")),
                 # The _o2 bm0=64 tile is the double K/V buffer bm0=64 kernel and only
                 # carries causal kernels (check_qr_tdm_kv_lds_buffering); occupancy 2 is
                 # the d128 default, it only makes its traits distinct.
-                (128, 128) : [FmhaFwdTileSize( 64,  64,  32, 128,  32,  128,  4, 1, 1,  4, 1, 1,  16, 16, 32,  16, 16, 32,   2, CppConstraint(GFX125_QR_TDM_D128_TINY_GRID)),
+                              FmhaFwdTileSize( 64,  64,  32, 128,  32,  128,  4, 1, 1,  4, 1, 1,  16, 16, 32,  16, 16, 32,   2, CppConstraint(GFX125_QR_TDM_D128_TINY_GRID)),
                               FmhaFwdTileSize( 64,  64,  32, 128,  32,  128,  4, 1, 1,  4, 1, 1,  16, 16, 32,  16, 16, 32,  -1, CppConstraint(
                                   f"a.max_seqlen_q < {GFX125_QR_TDM_BM0_CROSSOVER_MAX_SEQLEN_Q[(128, 128)]}"
                                   f" || (({GFX125_QR_TDM_D128_WINDOWED_MASK}) && a.max_seqlen_q < 2048)")),

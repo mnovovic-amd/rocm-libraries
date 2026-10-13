@@ -950,7 +950,16 @@ class TestCompiledGfx125D192Dispatch(unittest.TestCase):
             ]
         )
         for mode, group in (("batch", 0), ("group", 1)):
-            for length, bm0 in ((1, 64), (127, 64), (128, 64), (1023, 64), (1024, 128)):
+            # max_seqlen_q <= 16 takes the 16-row short-query tile.
+            for length, bm0 in (
+                (1, 16),
+                (16, 16),
+                (17, 64),
+                (127, 64),
+                (128, 64),
+                (1023, 64),
+                (1024, 128),
+            ):
                 expected = dispatch.expected_id(
                     mode=mode,
                     hdim=128,
@@ -1790,11 +1799,11 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
                         pipeline="qr_tdm_sched", **features
                     )
                     q0 = _SCHED_MIN_Q[128]
-                    for size in (1, 127, 128, 129, q0 - 1, q0, 2048, 32768):
+                    for size in (1, 16, 17, 127, 128, 129, q0 - 1, q0, 2048, 32768):
                         fallback = dispatch.expected_id(
                             pipeline="qr_tdm",
                             spad="t" if group else "f",
-                            bm0=64 if size < q0 else 128,
+                            bm0=16 if size <= 16 else 64 if size < q0 else 128,
                             dpad="f",
                             **features,
                         )
@@ -1870,10 +1879,10 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
             self.assertEqual(dispatch.run(group=group, hdim_q=128), [fallback])
 
     def test_d128_qr_tdm_tiles_and_lds_bodies(self):
-        # d128 fp16/bf16 qr_tdm: bm0=128 and the _o2 bm0=64 tile run the double
-        # K/V buffer body, the plain bm0=64 tile the K ping/pong body; at bm0=64
-        # only the _o2 tile carries causal kernels. Only the K ping/pong kernels
-        # serve any seqlen_k from their unpadded instance.
+        # d128 fp16/bf16 qr_tdm: bm0=16, bm0=128 and the _o2 bm0=64 tile run the
+        # double K/V buffer body, the plain bm0=64 tile the K ping/pong body; at
+        # bm0=64 only the _o2 tile carries causal kernels. Only the K ping/pong
+        # kernels serve any seqlen_k from their unpadded instance.
         _, kernels = get_fwd_blobs(
             ["gfx1250"], _SUPPORTED_DISPATCH_FILTER, 600, [128, 192], "simplified"
         )
@@ -1886,7 +1895,7 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
             tile, pipeline = kernel.F_tile, kernel.F_pipeline
             double = pipeline.F_use_double_kv_lds_buffer == "t"
             self.assertEqual(ping_pong, not double, kernel.name)
-            if tile.F_bm0 == 128:
+            if tile.F_bm0 in (16, 128):
                 self.assertTrue(double, kernel.name)
             else:
                 self.assertEqual(tile.F_bm0, 64, kernel.name)
@@ -1894,7 +1903,9 @@ class TestCompiledGfx125V128Dispatch(unittest.TestCase):
                 self.assertEqual(double, o2, kernel.name)
                 self.assertEqual(pipeline.F_mask == "causal", o2, kernel.name)
             seen.add((tile.F_bm0, tile.F_occupancy, double))
-        self.assertEqual(seen, {(128, -1, True), (64, 2, True), (64, -1, False)})
+        self.assertEqual(
+            seen, {(16, -1, True), (128, -1, True), (64, 2, True), (64, -1, False)}
+        )
 
     def test_d128_k_ping_pong_dispatch(self):
         pool, kernels = get_fwd_blobs(
