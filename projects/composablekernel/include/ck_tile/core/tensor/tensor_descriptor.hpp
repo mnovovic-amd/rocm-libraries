@@ -270,6 +270,18 @@ CK_TILE_HOST_DEVICE constexpr long_index_t calculate_element_space_size_impl(con
 
 } // namespace detail
 
+namespace detail {
+// Whether an element space size must be clamped to the index_t range: only a
+// positive size of 2^31 or more. Written on the two 32-bit halves so that a
+// wave-uniform size stays in SGPRs (a 64-bit signed min or compare does not).
+CK_TILE_HOST_DEVICE constexpr bool needs_element_space_clamp(long_index_t size)
+{
+    const int32_t hi  = static_cast<int32_t>(size >> 32);
+    const uint32_t lo = static_cast<uint32_t>(size);
+    return hi > 0 || (hi == 0 && lo > 0x7fffffffu);
+}
+} // namespace detail
+
 /*
  * These functions create naive tensor descriptor
  */
@@ -310,9 +322,10 @@ make_naive_tensor_descriptor(const tuple<Lengths...>& lengths,
     // scalar 64-bit signed min, so the min lowers to v_min_i64 and parks a
     // wave-uniform value in a VGPR. Every buffer resource built from it then
     // looks divergent and the compiler wraps each buffer op in a waterfall
-    // loop. Comparing against zero lowers to s_cmp_lg_u64 and stays in SGPRs.
-    // element_space_size_long is a sum of length*stride products, always >= 0.
-    const index_t element_space_size = ((element_space_size_long >> 31) != 0)
+    // loop. The test below works on the two 32-bit halves, which stay scalar.
+    // Only a positive size of 2^31 or more is clamped: a zero-length dimension
+    // makes the size negative ((length - 1) * stride), and std::min kept that.
+    const index_t element_space_size = detail::needs_element_space_clamp(element_space_size_long)
                                            ? static_cast<index_t>(element_space_size_clamp_value)
                                            : static_cast<index_t>(element_space_size_long);
 
@@ -355,9 +368,8 @@ make_naive_tensor_descriptor_with_offset(const tuple<Lengths...>& lengths,
             static_cast<long_index_t>(std::numeric_limits<index_t>::max());
         // See the note in make_naive_tensor_descriptor: std::min on
         // long_index_t lowers to v_min_i64 and makes the SRD divergent.
-        // element_space_size_long is always >= 0 here.
         const index_t element_space_size =
-            ((element_space_size_long >> 31) != 0)
+            detail::needs_element_space_clamp(element_space_size_long)
                 ? static_cast<index_t>(element_space_size_clamp_value)
                 : static_cast<index_t>(element_space_size_long);
 
