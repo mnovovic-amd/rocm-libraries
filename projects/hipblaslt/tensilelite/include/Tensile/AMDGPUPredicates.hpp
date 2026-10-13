@@ -163,13 +163,29 @@ namespace TensileLite
 
                 virtual bool operator()(AMDGPU const& gpu) const override
                 {
-                    return gpu.processor == value;
+                    if(gpu.processor == value)
+                        return true;
+
+                    // A solution built for an LLVM generic family target (e.g.
+                    // gfx11-generic) is by construction runnable on every member of
+                    // that family, so accept it for a concrete member too. Without
+                    // this the running GPU always reports its specific processor
+                    // (gfx1100) and every generic solution is filtered out, i.e. a
+                    // generic library loads but yields zero heuristic solutions.
+                    return AMDGPU::isGenericProcessor(value)
+                           && AMDGPU::toGenericProcessor(gpu.processor) == value;
                 }
 
                 virtual bool debugEval(AMDGPU const& gpu,
                                        std::ostream& stream) const override
                 {
-                    return debugEvalCmp(gpu, stream, "gpu", gpu.archName(), "==", "sol", AMDGPU::toString(value));
+                    // Print the name the comparison actually uses, so a generic hit
+                    // does not read as the contradiction "gfx1100 == gfx11-generic".
+                    const auto lhs
+                        = AMDGPU::isGenericProcessor(value)
+                              ? AMDGPU::toString(AMDGPU::toGenericProcessor(gpu.processor))
+                              : gpu.archName();
+                    return debugEvalCmp(gpu, stream, "gpu", lhs, "==", "sol", AMDGPU::toString(value));
                 }
             };
 

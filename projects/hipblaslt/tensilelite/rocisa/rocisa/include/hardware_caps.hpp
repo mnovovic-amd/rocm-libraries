@@ -21,6 +21,7 @@
  *
  * ************************************************************************ */
 #pragma once
+#include <algorithm>
 #include <array>
 #include <iostream>
 #include <map>
@@ -550,8 +551,53 @@ inline std::map<std::string, int>
     return rv;
 }
 
+// Concrete (step>=0) members of each LLVM generic family, grouped by (major,minor).
+// Source of truth: Tensile/Common/Architectures.py SUPPORTED_ISA — keep in sync when a
+// member arch is added there. Used to derive a generic target's caps as the family LCD.
+inline std::vector<IsaVersion> genericFamilyMembers(const IsaVersion& isaVersion)
+{
+    static const std::vector<IsaVersion> supported = {
+        {9, 0, 0},   {9, 0, 6},   {9, 0, 8},   {9, 0, 10},
+        {9, 4, 2},   {9, 5, 0},
+        {10, 1, 0},  {10, 1, 1},  {10, 1, 2},
+        {10, 3, 0},
+        {11, 0, 0},  {11, 0, 1},  {11, 0, 2},  {11, 0, 3},
+        {11, 5, 0},  {11, 5, 1},  {11, 5, 2},  {11, 5, 3},
+        {12, 0, 0},  {12, 0, 1},  {12, 5, 0},
+    };
+    std::vector<IsaVersion> members;
+    for(const auto& v : supported)
+        if(v[0] == isaVersion[0] && v[1] == isaVersion[1])
+            members.push_back(v);
+    return members;
+}
+
 inline std::map<std::string, int> initArchCaps(const IsaVersion& isaVersion)
 {
+    // Generic family targets carry a negative step sentinel, e.g. (11,0,-1) for
+    // gfx11-generic. The caps below are selected by exact (major,minor,step) tuple
+    // equality via checkInList, so a sentinel matches none of them and would silently
+    // fall through to the all-False (gfx900-like) profile — giving a generic target the
+    // wrong caps and mis-assembling its kernels. Derive a generic target's caps as the
+    // least-common-denominator over the family's concrete members — a boolean cap is set
+    // only when every member has it, a numeric cap takes the family minimum (both ==
+    // std::min of the 0/1 or integer values). Recursing over members stays correct as
+    // members grow.
+    if(isaVersion[2] < 0)
+    {
+        const std::vector<IsaVersion>           members = genericFamilyMembers(isaVersion);
+        std::vector<std::map<std::string, int>> memberCaps;
+        for(const auto& m : members)
+            memberCaps.push_back(initArchCaps(m));
+        if(memberCaps.empty())
+            memberCaps.push_back(initArchCaps({isaVersion[0], isaVersion[1], 0}));
+        std::map<std::string, int> rv = memberCaps.front();
+        for(size_t i = 1; i < memberCaps.size(); ++i)
+            for(auto& kv : rv)
+                kv.second = std::min(kv.second, memberCaps[i].at(kv.first));
+        return rv;
+    }
+
     std::vector<std::array<int, 3>> b = {{9, 0, 6}, {9, 0, 8}, {9, 0, 10}, {9, 4, 2}};
     std::map<std::string, int>      rv;
     rv["HasEccHalf"]

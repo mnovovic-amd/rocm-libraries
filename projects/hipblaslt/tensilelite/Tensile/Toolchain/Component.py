@@ -169,6 +169,20 @@ class Assembler(Component):
             destPath: The destination path for the generated object file.
         """
         args = self._default_args
+        # LLVM family ("generic") targets only exist from code object v6 on: only then
+        # does the assembler emit ABI v4 plus EF_AMDGPU_GENERIC_VERSION_V1, which is
+        # what the HIP/HSA loader checks before it will run the object on a concrete
+        # member of the family. Assembled with the default v4 the object loads nowhere
+        # ("no kernel image is available for execution on the device"), so override the
+        # requested version here rather than exposing 6 through --code-object-version
+        # (the metadata/kernel descriptor stay on the requested version).
+        if targetGfx.endswith("-generic"):
+            args = [
+                "-mcode-object-version=6"
+                if a == f"-mcode-object-version={self._code_object_version}"
+                else a
+                for a in args
+            ]
         # Enable true16 syntax on targets that support +real-true16.
         if targetGfx in ("gfx1250", "gfx1201", "gfx1200", "gfx1100"):
             args = args + ["-Xclangas", "-target-feature", "-Xclangas", "+real-true16"]

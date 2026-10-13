@@ -2810,6 +2810,13 @@ namespace
 
             // The name of the current GPU platform
             std::string processor = rocblaslt_internal_get_arch_name();
+            // Generic (family-wide) fallback name, e.g. gfx1152 -> "gfx11-generic".
+            // Equals `processor` when the chip has no generic family.
+            std::string generic = rocblaslt_internal_get_generic_arch_name(deviceId);
+            // The gfx11 generic library replaces all eight concrete gfx11 trees in this
+            // fork. Do not fall back to a concrete library: the generated library and all
+            // runtime mapping names must stay on gfx11-generic.
+            const std::string libProcessor = generic;
 
             // ROCM-26729 / SEC-00896: use the privilege-aware accessor so a
             // process in a secure execution context cannot be redirected to an
@@ -2852,35 +2859,18 @@ namespace
                 if(auto maybe_path = rocblaslt_find_library_relative_path(
                        /*relpath=*/std::nullopt, default_lib_path))
                     path = std::move(*maybe_path);
-                // Optionally, look for a per-architecture sub-directory under the library
-                // path. Only use the subdir if a Tensile mapping file is actually present
-                // there; otherwise the directory may have been created by ExtOp/Transform
-                // installs without a corresponding Tensile library (multi-arch non-TheRock
-                // builds). The subdir is revisioned (library/gfx1250v0/ for a v0 part, no
-                // fallback) while the mapping filenames keep the base `processor` token.
+                // Look for the sole gfx11-generic library subdirectory. Only use it when
+                // a Tensile mapping file is present; ExtOp/Transform may create directories
+                // without a corresponding GEMM library.
+                const std::string proc = generic;
+                const auto processor_path = path / proc;
+                const auto mapping_msgpack = processor_path / ("TensileLibrary_lazy_" + proc + ".dat");
+                const auto mapping_msgpack_gz = processor_path / ("TensileLibrary_lazy_" + proc + ".dat.zlib");
+                const auto mapping_yaml = processor_path / ("TensileLibrary_lazy_" + proc + ".yaml");
+                if(std::filesystem::exists(mapping_msgpack) || std::filesystem::exists(mapping_msgpack_gz)
+                   || std::filesystem::exists(mapping_yaml))
                 {
-                    auto processor_path     = path / rocblaslt_internal_get_library_arch_name();
-                    auto mapping_msgpack    = processor_path / ("TensileLibrary_lazy_" + processor + ".dat");
-                    auto mapping_msgpack_gz = processor_path / ("TensileLibrary_lazy_" + processor + ".dat.zlib");
-                    auto mapping_yaml       = processor_path / ("TensileLibrary_lazy_" + processor + ".yaml");
-                    if(std::filesystem::exists(mapping_msgpack) || std::filesystem::exists(mapping_msgpack_gz)
-                       || std::filesystem::exists(mapping_yaml))
-                    {
-                        // Grab the chosen subdir name before the move. It differs
-                        // from the base `processor` only for a silicon revision
-                        // (e.g. gfx1250v0); log that -- the only runtime signal a
-                        // non-v1 revision was loaded.
-                        const auto libArch = processor_path.filename().string();
-                        path               = std::move(processor_path);
-                        if(libArch != processor
-                           && (get_logger_layer_mode() & rocblaslt_layer_mode_log_info))
-                        {
-                            std::ostringstream msg;
-                            msg << "Loading ASIC-revision GEMM subtree: " << libArch
-                                << " (compiler target " << processor << ")" << std::endl;
-                            log_info(__func__, msg.str());
-                        }
-                    }
+                    path = std::move(processor_path);
                 }
 
                 if(get_logger_layer_mode() & rocblaslt_layer_mode_log_info)
@@ -2891,6 +2881,8 @@ namespace
                 }
             }
 
+            const std::string libPrefix = lazyLoad ? "TensileLibrary_lazy_" : "TensileLibrary_";
+            const std::string libExt    = enableYaml ? ".yaml" : ".dat";
             // only load modules for the current architecture (contains the processor
             // string and ends in "co").
             if(!lazyLoad)
@@ -2899,7 +2891,7 @@ namespace
                 for(const auto& entry : std::filesystem::directory_iterator(path))
                 {
                     auto filename = entry.path().filename();
-                    if(filename.string().find(processor) != std::string::npos
+                    if(filename.string().find(libProcessor) != std::string::npos
                        && filename.extension().string() == ".co")
                     {
                         static_cast<void>(adapter.loadCodeObjectFile(entry.path().string()));
@@ -2927,33 +2919,9 @@ namespace
                 // loader resolves a compressed variant by appending ".zlib", and
                 // downstream filename parsing (initLibraryMapping, placeholder
                 // suffix derivation) assumes a single extension.
-                std::filesystem::path tensileLibPath;
-                if(lazyLoad)
-                {
-                    if(enableYaml)
-                    {
-                        tensileLibPath
-                            = path / (std::string("TensileLibrary_lazy_") + processor + ".yaml");
-                    }
-                    else
-                    {
-                        tensileLibPath
-                            = path / (std::string("TensileLibrary_lazy_") + processor + ".dat");
-                    }
-                }
-                else
-                {
-                    if(enableYaml)
-                    {
-                        tensileLibPath
-                            = path / (std::string("TensileLibrary_") + processor + ".yaml");
-                    }
-                    else
-                    {
-                        tensileLibPath
-                            = path / (std::string("TensileLibrary_") + processor + ".dat");
-                    }
-                }
+                // libProcessor is always the gfx11-generic family name.
+                std::filesystem::path tensileLibPath = path / (libPrefix + libProcessor + libExt);
+
                 if(!std::filesystem::exists(tensileLibPath)
                    && !std::filesystem::exists(tensileLibPath.string() + ".zlib"))
                 {
@@ -2961,6 +2929,12 @@ namespace
                               << " (or .zlib variant): " << strerror(errno) << std::endl;
                     // rocblaslt_abort();
                 }
+
+                if(getenv("HIPBLASLT_VERBOSE_GENERIC"))
+                    std::cerr << "[hipblaslt-generic] device=" << processor << " generic=" << generic
+                              << " -> loading libProcessor=" << libProcessor
+                              << (libProcessor == generic ? " (GENERIC)" : " (specific)")
+                              << " path=" << tensileLibPath.string() << std::endl;
 
 #if ROCBLASLT_TENSILE_LAZY_LOAD
                 // Get devices
@@ -3018,7 +2992,9 @@ namespace
                 return 0;
             }();
 
-            static_cast<void>(adapter.initializeLazyLoading(processor, path.string()));
+            // Use the generic family name so helper kernels resolve in the
+            // generic-only build.
+            static_cast<void>(adapter.initializeLazyLoading(libProcessor, path.string()));
 
             if(!m_library && once != 0)
             {
@@ -4419,6 +4395,27 @@ inline auto getSolutions(
     const int&                                    requestedAlgoCount)
 {
     auto solutions = library->findTopSolutions(tensile_prob, *hardware, requestedAlgoCount);
+    if(getenv("HIPBLASLT_VERBOSE_GENERIC") && !solutions.empty())
+        std::cerr << "[hipblaslt-generic] heuristic top solution: " << solutions[0]->name()
+                  << " (of " << solutions.size() << ")" << std::endl;
+    // Per-GEMM selection trace: prints the problem (M,N,K,transpose,dtype) and the
+    // kernel/solution the active library chose. Fires for BOTH the stock
+    // (Equality/GridBased) and origami (Prediction) libraries, since both route
+    // through findTopSolutions here -- so a single run shows STOCK-pick vs OURS-pick.
+    if(getenv("HIPBLASLT_SELECT_DEBUG"))
+    {
+        size_t dbgM = tensile_prob.freeSizeA(0);
+        size_t dbgN = tensile_prob.freeSizeB(0);
+        size_t dbgK = tensile_prob.boundSize(0);
+        std::cerr << "[hipblaslt-select] M=" << dbgM << " N=" << dbgN << " K=" << dbgK
+                  << " trans=" << (tensile_prob.transA() ? 'T' : 'N')
+                  << (tensile_prob.transB() ? 'T' : 'N')
+                  << " Atype=" << TensileLite::ToString(tensile_prob.a().dataType())
+                  << " Dtype=" << TensileLite::ToString(tensile_prob.d().dataType())
+                  << " -> " << (solutions.empty() ? std::string("<none>") : solutions[0]->name())
+                  << " (idx=" << (solutions.empty() ? -1 : solutions[0]->index) << ", of "
+                  << solutions.size() << ")" << std::endl;
+    }
     return solutions;
 }
 

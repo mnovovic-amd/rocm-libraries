@@ -119,9 +119,11 @@ class KernelWriterActivationFunction(KernelWriterBase):
     defineStr = []
     macroStr = "#if"
     for archList in cateArch:
-      defStr = "%s defined(__%s__)"%(macroStr, isaToGfx(archList[0]))
+      # Hyphens in generic names (gfx11-generic) are illegal in a C macro id;
+      # clang predefines the underscore form (__gfx9_4_generic__), so match it.
+      defStr = "%s defined(__%s__)"%(macroStr, isaToGfx(archList[0]).replace("-", "_"))
       for arch in archList:
-        defStr += "|| defined(__%s__)"%isaToGfx(arch)
+        defStr += "|| defined(__%s__)"%isaToGfx(arch).replace("-", "_")
       defStr += "\n"
       defineStr.append(defStr)
       macroStr = "#elif"

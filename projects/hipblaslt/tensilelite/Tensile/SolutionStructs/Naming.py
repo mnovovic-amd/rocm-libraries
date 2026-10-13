@@ -134,6 +134,12 @@ def getPrimitiveParameterValueAbbreviation(key, value):
 
 def getParameterValueAbbreviation(key, value):
   if key == "ISA":
+    # Generic (family-wide) targets carry a negative step sentinel; "%x" would emit
+    # "-1", and the '-' is illegal in an assembler symbol name. Encode with a
+    # trailing 'g' instead ('g' is not a hex digit, so it cannot collide with a
+    # concrete step 0-f).
+    if value[2] < 0:
+      return f"{value[0]}{value[1]}g"
     return f"{value[0]}{value[1]}{value[2]:x}"
   compositieTypes = (dict, list, tuple,)
   if not isinstance(value, compositieTypes):

@@ -1338,9 +1338,20 @@ namespace TensileLite
         uint32_t defaultWGMXCCCHUNK  = 0;
         uint32_t defaultWGMXCCSPLITK = 0;
 
+        // Generic GridBased libraries can request automatic WGM on a device that
+        // this host's Origami build does not yet recognize.
+        bool dynamicMapping = sizeMapping.streamK != 0 && skgrid != 0
+                              && sizeMapping.workGroupMapping == 0
+                              && sizeMapping.workGroupMappingXCC == -1;
+        if((dynamicMapping || sizeMapping.workGroupMapping == 0
+            || sizeMapping.workGroupMappingXCC == -1)
+           && (!hipAMDGPU || !hipAMDGPU->analyticalHardware))
+            throw std::runtime_error("AutoWGM requires Origami hardware support for this GPU");
+        if(!pAMDGPU)
+            throw std::runtime_error("AutoWGM requires AMDGPU hardware");
+
         // Dynamically pick the values
-        if(sizeMapping.streamK != 0 && skgrid != 0 && sizeMapping.workGroupMapping == 0
-           && sizeMapping.workGroupMappingXCC == -1)
+        if(dynamicMapping)
         {
             auto sizes = problem.problemSizes();
             // Try to find cached WGM, WGMXCC, WGMXCCCHUNK, WGMXCCSPLITK
@@ -1471,6 +1482,8 @@ namespace TensileLite
         if(sizeMapping.streamK != 0 && skgrid != 0 && sizeMapping.workGroupMapping == 0
            && sizeMapping.workGroupMappingXCC == -1)
         {
+            if(!hipAMDGPU || !hipAMDGPU->analyticalHardware)
+                throw std::runtime_error("AutoStaggerU requires Origami hardware support for this GPU");
             auto sizes = problem.problemSizes();
             // Try to find cached StaggerUMapping, StaggerU and StaggerUStrideShift
             auto cachedStaggerUParams = staggerUParamsCache.find(problem);

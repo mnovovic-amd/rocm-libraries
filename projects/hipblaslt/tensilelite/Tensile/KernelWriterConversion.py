@@ -631,9 +631,11 @@ class KernelWriterConversion(KernelWriterBase):
           canPKF32Arch.append(isa)
       defineStr = []
       if len(canPKF32Arch) > 0:
-        defineStr = "#if defined(__%s__)"%isaToGfx(canPKF32Arch[0])
+        # Hyphens in generic names (gfx11-generic) are illegal in a C macro id;
+        # clang predefines the underscore form (__gfx9_4_generic__), so match it.
+        defineStr = "#if defined(__%s__)"%isaToGfx(canPKF32Arch[0]).replace("-", "_")
         for arch in canPKF32Arch[1:]:
-          defineStr += "|| defined(__%s__)"%isaToGfx(arch)
+          defineStr += "|| defined(__%s__)"%isaToGfx(arch).replace("-", "_")
       else:
         defineStr = "#if 0"
       # PGR=2

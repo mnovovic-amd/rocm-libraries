@@ -167,6 +167,13 @@ namespace
             // that never appear in the library filename.
             const std::string arch      = gpuArchName();
             const std::string processor = arch.substr(0, arch.find(':'));
+            const auto device = TensileLite::hip::GetCurrentDevice();
+            const std::string libraryArch = device
+                                                 ? TensileLite::AMDGPU::toString(
+                                                       TensileLite::AMDGPU::toGenericProcessor(
+                                                           TensileLite::AMDGPU::toProcessor(
+                                                               device->archName())))
+                                                 : processor;
 
             std::string tried;
             for(const auto& root : libraryRootCandidates())
@@ -174,7 +181,7 @@ namespace
                 // Always the logical single-extension name: the loader resolves
                 // the shipped ".dat.zlib" by appending the suffix itself.
                 const std::filesystem::path logical
-                    = root / processor / ("TensileLibrary_lazy_" + processor + ".dat");
+                    = root / libraryArch / ("TensileLibrary_lazy_" + libraryArch + ".dat");
                 tried += (tried.empty() ? "" : ", ") + logical.string();
 
                 if(!std::filesystem::exists(logical)

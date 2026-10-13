@@ -3,7 +3,9 @@
 
 set(ops_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../tensilelite")
 set(output_dir "${CMAKE_CURRENT_BINARY_DIR}")
-string(REGEX MATCHALL "gfx[a-z0-9]+" archs "${GPU_TARGETS}")
+# Keep auxiliary libraries aligned with the generic GEMM library.
+string(REGEX MATCHALL "gfx[a-z0-9]+(-[a-z0-9]+)*" archs "${GPU_TARGETS}")
+list(TRANSFORM archs REPLACE "^(gfx1100|gfx1101|gfx1102|gfx1103|gfx1150|gfx1151|gfx1152|gfx1153)$" "gfx11-generic")
 list(REMOVE_DUPLICATES archs)
 message(STATUS "Architectures to process: ${archs}")
 
@@ -17,13 +19,14 @@ foreach(arch IN LISTS archs)
         set(extop_xnack_args --xnack)
     endif()
     set(WAVEFRONT "-mwavefrontsize64")
-    if(arch MATCHES "^gfx1[12][0-9][0-9]$")
+    # GFX11 defaults to wave32; this covers concrete GFX11 targets and gfx11-generic.
+    if(arch MATCHES "^gfx11[0-9][0-9]$" OR arch MATCHES "^gfx11-generic$")
         set(WAVEFRONT "-mno-wavefrontsize64")
     endif()
     add_library(extop-obj-${arch} OBJECT)
     target_compile_options(extop-obj-${arch}
         PRIVATE
-            -Wno-unused-command-line-argument -x assembler -target amdgcn-amd-amdhsa -mcode-object-version=4 -mcpu=${offload_arch} ${WAVEFRONT} -c
+            -Wno-unused-command-line-argument -x assembler -target amdgcn-amd-amdhsa -mcode-object-version=6 -mcpu=${offload_arch} ${WAVEFRONT} -c
     )
     target_sources(extop-obj-${arch}
         PRIVATE

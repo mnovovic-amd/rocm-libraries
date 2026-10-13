@@ -1102,7 +1102,10 @@ int main(int argc, const char* argv[])
 
     {
         ScopedTimer timer("lazy_loading_init");
-        auto result = adapter.initializeLazyLoading(hardware->archName(), libraryDirectory);
+        auto processor = TensileLite::AMDGPU::toProcessor(hardware->archName());
+        auto libraryArch = TensileLite::AMDGPU::toString(
+            TensileLite::AMDGPU::toGenericProcessor(processor));
+        auto result = adapter.initializeLazyLoading(libraryArch, libraryDirectory);
         if(result != hipSuccess)
         {
             std::string str = "Lazy loading failed. (" + std::to_string(int(result)) + ").";

@@ -78,7 +78,10 @@ namespace TensileLite
             gfx1153 = 1153,
             gfx1200 = 1200,
             gfx1201 = 1201,
-            gfx1250 = 1250
+            gfx1250 = 1250,
+            // Generic (family-wide) targets use negative values to avoid colliding
+            // with the hipGcnArch-matched positive IDs above.
+            gfx11_generic   = -1100
         };
 
         static Processor toProcessor(std::string archName)
@@ -179,6 +182,12 @@ namespace TensileLite
             {
                 return Processor::gfx1250;
             }
+            // Generic (family-wide) targets. These substrings do not collide with the
+            // concrete gfxNNNN names above, so ordering here is not significant.
+            else if(archName.find("gfx11-generic") != std::string::npos)
+            {
+                return Processor::gfx11_generic;
+            }
             return static_cast<Processor>(0);
         }
 
@@ -234,10 +243,50 @@ namespace TensileLite
                 return "gfx1201";
             case AMDGPU::Processor::gfx1250:
                 return "gfx1250";
+            case AMDGPU::Processor::gfx11_generic:
+                return "gfx11-generic";
             case AMDGPU::Processor::gfx000:
                 return "gfx000";
             }
             return "";
+        }
+
+        /**
+         * True for the LLVM family ("generic") targets, which are encoded as negative
+         * values so they cannot collide with the hipGcnArch-matched positive IDs.
+         */
+        static bool isGenericProcessor(Processor p)
+        {
+            return static_cast<int>(p) < 0;
+        }
+
+        /**
+         * Returns the LLVM generic family target that `p` belongs to, or `p` itself when
+         * the processor has no generic family (gfx803, and any arch not listed below).
+         * Passing a generic target returns it unchanged, so this is idempotent.
+         *
+         * Keep in sync with rocblaslt_internal_get_generic_arch_name() in
+         * rocblaslt_auxiliary.cpp -- that one maps arch *names* to pick WHICH library
+         * directory is opened, this one maps *processors* to decide whether the
+         * solutions inside it are applicable. A divergence loads a library and then
+         * finds nothing usable in it.
+         */
+        static Processor toGenericProcessor(Processor p)
+        {
+            switch(p)
+            {
+            case AMDGPU::Processor::gfx1100:
+            case AMDGPU::Processor::gfx1101:
+            case AMDGPU::Processor::gfx1102:
+            case AMDGPU::Processor::gfx1103:
+            case AMDGPU::Processor::gfx1150:
+            case AMDGPU::Processor::gfx1151:
+            case AMDGPU::Processor::gfx1152:
+            case AMDGPU::Processor::gfx1153:
+                return AMDGPU::Processor::gfx11_generic;
+            default:
+                return p;
+            }
         }
 
         AMDGPU();

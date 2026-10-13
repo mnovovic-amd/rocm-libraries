@@ -942,6 +942,43 @@ TEST(StreamKDynamicQueueXcdGateTest, AllowsGfx950EightXcd)
         << "gfx950 (NUM_XCD=8) must keep the dynamic-queue work-stealing path";
 }
 
+TEST(AutoWGMHardwareTest, MissingAnalyticalHardwareRejectsAutomaticMapping)
+{
+    hip::HipAMDGPU device;
+    device.processor        = AMDGPU::Processor::gfx1101;
+    device.computeUnitCount = 48;
+    auto problem            = ContractionProblemGemm::GEMM(true, false, 1, 1, 12, 12, 12, 1, 1.0, false, 1);
+    ContractionSolution solution;
+    solution.sizeMapping.workGroupMapping    = 0;
+    solution.sizeMapping.workGroupMappingXCC = 1;
+
+    EXPECT_THROW(solution.calculateAutoWGM(problem, &device, 0), std::runtime_error);
+    solution.sizeMapping.workGroupMapping = 8;
+    EXPECT_EQ(std::get<0>(solution.calculateAutoWGM(problem, &device, 0)), 8);
+    solution.sizeMapping.workGroupMappingXCC = -1;
+    EXPECT_THROW(solution.calculateAutoWGM(problem, &device, 0), std::runtime_error);
+    solution.sizeMapping.workGroupMapping    = 0;
+    solution.sizeMapping.streamK             = 3;
+    EXPECT_THROW(solution.calculateAutoWGM(problem, &device, 1), std::runtime_error);
+    EXPECT_THROW(solution.calculateAutoStaggerU(problem, &device, 1, 1), std::runtime_error);
+}
+
+TEST(AutoWGMHardwareTest, SupportedAnalyticalHardwareCalculatesAutomaticMapping)
+{
+    origami::hardware_t analytical = makeGfx950AnalyticalHardware();
+    hip::HipAMDGPU device           = makeHipDeviceWithAnalytical(analytical);
+    auto problem                    = ContractionProblemGemm::GEMM(true, false, 1, 1, 12, 12, 12, 1, 1.0, false, 1);
+    ContractionSolution solution;
+    solution.sizeMapping.workGroupMapping    = 0;
+    solution.sizeMapping.workGroupMappingXCC = 1;
+
+    auto [wgm, xcc, chunk, splitK] = solution.calculateAutoWGM(problem, &device, 0);
+    EXPECT_GT(wgm, 0);
+    EXPECT_EQ(xcc, 1u);
+    EXPECT_EQ(chunk, 0u);
+    EXPECT_EQ(splitK, 0u);
+}
+
 TEST(StreamKDynamicQueueXcdGateTest, MissingAnalyticalHardwareIsUnsupported)
 {
     // Unknown hardware (null analyticalHardware -> unknown NUM_XCD / baked

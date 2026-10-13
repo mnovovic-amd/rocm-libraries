@@ -239,6 +239,11 @@ namespace TensileLite
                 iot::enumCase(io, value, "gfx1200", AMDGPU::Processor::gfx1200);
                 iot::enumCase(io, value, "gfx1201", AMDGPU::Processor::gfx1201);
                 iot::enumCase(io, value, "gfx1250", AMDGPU::Processor::gfx1250);
+                // Generic (family-wide) targets. The names must match the strings
+                // Tensile emits (Common/Architectures.py isaToGfx), otherwise
+                // msgpack/YAML deserialization of an AMDGPUISA predicate fails with
+                // "Enum not found!" and the whole library file refuses to load.
+                iot::enumCase(io, value, "gfx11-generic", AMDGPU::Processor::gfx11_generic);
             }
         };
 

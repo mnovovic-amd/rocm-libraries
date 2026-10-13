@@ -310,6 +310,16 @@ namespace rocisa
                 if(branch.back())
                     output.push_back(cloneAndSubstitute(instruction, params));
             }
+            else if(auto textBlock = std::dynamic_pointer_cast<TextBlock>(item))
+            {
+                // Comments can appear in macro bodies through addComment*.
+                if(branch.back())
+                {
+                    auto cloned = std::dynamic_pointer_cast<TextBlock>(textBlock->clone());
+                    cloned->text = substituteStringParam(cloned->text, params);
+                    output.push_back(cloned);
+                }
+            }
             else
             {
                 assert(false && "macroToInstruction: unexpected item type in macro body");

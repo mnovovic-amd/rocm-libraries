@@ -172,7 +172,8 @@ namespace
             return {};
         }
 
-        const std::string archName = trimArchName(props.gcnArchName);
+        const std::string concreteArch = trimArchName(props.gcnArchName);
+        const std::string archName = rocblaslt_internal_get_generic_arch_name(deviceId);
         auto              basename = "hipblasltExtOpLibrary_" + archName;
         auto              relpath  = std::filesystem::path(archName) / (basename + ".dat");
         if(auto perArchPath = rocblaslt_find_library_relative_path(relpath))
@@ -305,7 +306,7 @@ hipblasStatus_t hipblasltSoftmaxRun(hipDataType datatype,
     auto        err       = hipGetDevice(&currentDeviceId);
     auto&       adapter   = extOpLibraries().at(currentDeviceId);
     auto        gpu       = TensileLite::hip::GetCurrentDevice();
-    const auto  archName  = trimArchName(gpu->archName());
+    const auto  archName  = rocblaslt_internal_get_generic_arch_name(currentDeviceId);
     auto&       masterLib = getExtOpMasterLibrary();
     const auto& lib       = masterLib
                           .getLibrary(archName,
@@ -367,7 +368,7 @@ hipblasStatus_t hipblasltLayerNormRun(hipDataType datatype,
     auto        err       = hipGetDevice(&currentDeviceId);
     auto&       adapter   = extOpLibraries().at(currentDeviceId);
     auto        gpu       = TensileLite::hip::GetCurrentDevice();
-    const auto  archName  = trimArchName(gpu->archName());
+    const auto  archName  = rocblaslt_internal_get_generic_arch_name(currentDeviceId);
     auto&       masterLib = getExtOpMasterLibrary();
     const auto& lib       = masterLib
                           .getLibrary(archName,
@@ -436,7 +437,7 @@ hipblasStatus_t hipblasltAMaxRun(const hipDataType datatype,
     auto        err       = hipGetDevice(&currentDeviceId);
     auto&       adapter   = extOpLibraries().at(currentDeviceId);
     auto        gpu       = TensileLite::hip::GetCurrentDevice();
-    const auto  archName  = trimArchName(gpu->archName());
+    const auto  archName  = rocblaslt_internal_get_generic_arch_name(currentDeviceId);
     auto&       masterLib = getExtOpMasterLibrary();
     const auto& lib       = masterLib
                           .getLibrary(archName,

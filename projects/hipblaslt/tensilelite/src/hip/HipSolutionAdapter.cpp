@@ -28,6 +28,7 @@
 #include <hip/hip_runtime.h>
 
 #include <cstddef>
+#include <unordered_map>
 
 #include <Tensile/Debug.hpp>
 #include <Tensile/EmbeddedData.hpp>
@@ -95,6 +96,42 @@ namespace TensileLite
                 coFilename.replace(loc - 1, xnackVersion.length() + 2, "");
 
             return coFilename;
+        }
+
+        // Map a concrete gfx arch to its generic (family-wide) target name, or "" if none.
+        // Mirrors the chip->family map used on the rocblaslt side (#5243 / #9366).
+        static std::string genericFamilyFor(std::string const& arch)
+        {
+            // Keep in sync with rocblaslt_auxiliary.cpp arch_map. Only gfx11
+            // concrete chips are mapped to the family library here.
+            static const std::unordered_map<std::string, std::string> m = {
+                {"gfx1100", "gfx11-generic"},   {"gfx1101", "gfx11-generic"},
+                {"gfx1102", "gfx11-generic"},   {"gfx1103", "gfx11-generic"},
+                {"gfx1150", "gfx11-generic"},   {"gfx1151", "gfx11-generic"},
+                {"gfx1152", "gfx11-generic"},   {"gfx1153", "gfx11-generic"},
+            };
+            auto it = m.find(arch);
+            return it == m.end() ? std::string() : it->second;
+        }
+
+        // Rewrite a code-object filename, replacing the concrete arch that follows
+        // archMarker with its generic family. Returns "" if the marker is absent or
+        // the arch has no generic family.
+        static std::string coFilenameForGenericFamily(std::string const& coFile,
+                                                      std::string const& archMarker)
+        {
+            auto pos = coFile.rfind(archMarker);
+            if(pos == std::string::npos)
+                return {};
+            pos += archMarker.length();
+            auto end = coFile.find('.', pos);
+            if(end == std::string::npos)
+                return {};
+            const auto arch = coFile.substr(pos, end - pos);
+            const auto generic = arch == "gfx11-generic" ? arch : genericFamilyFor(arch);
+            if(generic.empty())
+                return {};
+            return coFile.substr(0, pos) + generic + coFile.substr(end);
         }
 
         hipError_t SolutionAdapter::loadCodeObjectFile(std::string const& path)
@@ -298,7 +335,23 @@ namespace TensileLite
                     err = loadCodeObjectFile(codeObjectDir + modifiedCOName);
 
                     if(err == hipSuccess)
-                        break;
+                        return true;
+                }
+
+                // Concrete arch code object not found: fall back to the generic
+                // family code object (e.g. ..._fallback_gfx11-generic) if present.
+                std::string genericCOFile
+                    = coFilenameForGenericFamily(codeObjectFile, "_fallback_");
+                if(!genericCOFile.empty())
+                {
+                    size_t gloc = genericCOFile.rfind('.');
+                    for(auto ver : {"", "-xnack-", "-xnack+"})
+                    {
+                        std::string modifiedCOName = genericCOFile;
+                        modifiedCOName.insert(gloc, ver);
+                        if(loadCodeObjectFile(codeObjectDir + modifiedCOName) == hipSuccess)
+                            return true;
+                    }
                 }
                 return false;
             }

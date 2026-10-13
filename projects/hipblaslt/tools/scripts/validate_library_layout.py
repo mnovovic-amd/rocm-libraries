@@ -58,7 +58,7 @@ _GFX_PREFIX_RE = re.compile(r"^gfx[a-z0-9]+(?:[\-:][\-+a-z0-9]+)*$")
 
 
 def _arch_dir_name_is_base(name: str) -> bool:
-    return bool(re.fullmatch(r"gfx[a-z0-9]+", name))
+    return name == "gfx11-generic" or bool(re.fullmatch(r"gfx[a-z0-9]+", name))
 
 
 def _filename_arch_matches_dir(filename: str, base_arch: str) -> bool:

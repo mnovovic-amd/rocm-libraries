@@ -43,6 +43,10 @@ inline std::string getGfxNameTuple(const IsaVersion& isaVersion)
     Returns:
         The name of the GPU architecture (e.g., 'gfx906').
     */
+    if(isaVersion[2] < 0) // generic sentinel (step == -1): gfx11-generic
+    {
+        return std::string("gfx") + std::to_string(isaVersion[0]) + "-generic";
+    }
     const char int_to_hex[] = "0123456789abcdef";
     return std::string("gfx") + std::to_string(isaVersion[0]) + std::to_string(isaVersion[1])
            + int_to_hex[isaVersion[2]];

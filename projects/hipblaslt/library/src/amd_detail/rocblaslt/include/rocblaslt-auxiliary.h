@@ -459,6 +459,10 @@ std::string rocblaslt_internal_get_arch_name();
 // subtree keep the revision-agnostic rocblaslt_internal_get_arch_name().
 std::string rocblaslt_internal_get_library_arch_name();
 
+// map the device's concrete arch to its generic (family-wide) target name,
+// e.g. gfx1152 -> "gfx11-generic"; returns concrete name if no generic family
+std::string rocblaslt_internal_get_generic_arch_name(int deviceId);
+
 // for internal use of testing existence of path
 bool rocblaslt_internal_test_path(const std::string&);
 

@@ -517,6 +517,7 @@ def _resolve_fortran_compiler(explicit, rocm: Path):
             "{rocm}/bin/flang, then PATH flang, then PATH gfortran). "
             "Exits if none of those are found. Ignored without --clients."
         ),
+        "prefer_generic": "Prefer the generic (family-wide) Tensile library over the per-chip one at runtime.",
     }
 )
 def build(
@@ -559,6 +560,7 @@ def build(
     # -g from --gprof and cascades onto --logic-filter's -f.
     asic_revision=None,
     fortran_compiler=None,
+    prefer_generic=False,
 ):
     _supported_distros()
 
@@ -676,6 +678,8 @@ def build(
         cmake_opts += ["-DCMAKE_CXX_FLAGS=-pg", "-DCMAKE_C_FLAGS=-pg"]
     if not use_rocroller:
         cmake_opts.append("-DHIPBLASLT_ENABLE_ROCROLLER=OFF")
+    if prefer_generic:
+        cmake_opts.append("-DHIPBLASLT_PREFER_GENERIC=ON")
     if sys.platform == "win32":
         cmake_opts.append("-DHIPBLASLT_ENABLE_OPENMP=OFF")
         # Suppress Windows SDK min/max macros that break std::numeric_limits<T>::max().
@@ -701,8 +705,9 @@ def build(
 
     if build_type != "Release":
         cmake_opts.append("-DTENSILELITE_ASM_DEBUG=ON")
-    if logic_filter:
-        cmake_opts.append(f"-DTENSILELITE_LOGIC_FILTER={logic_filter}")
+    # Always pass the filter (empty = all logics) so an omitted --logic-filter resets a
+    # narrow value left in the CMake cache by a prior scoped build.
+    cmake_opts.append(f"-DTENSILELITE_LOGIC_FILTER={logic_filter}")
     if keep_build_tmp:
         cmake_opts.append("-DTENSILELITE_KEEP_BUILD_TMP=ON")
     if no_compress:
@@ -720,15 +725,18 @@ def build(
     if not clients:
         client_opts = ["-DHIPBLASLT_ENABLE_CLIENT=OFF"]
     else:
+        # Set ENABLE_CLIENT explicitly (not just via the default) so -c also flips a
+        # cache left at OFF by a prior no-client / -t configure.
+        client_opts = ["-DHIPBLASLT_ENABLE_CLIENT=ON"]
         if cpu_ref_lib == "blis":
             if sys.platform == "win32":
                 print("Warning: BLIS is not available on Windows. Disabling BLIS for clients.")
-                client_opts = ["-DHIPBLASLT_ENABLE_BLIS=OFF"]
+                client_opts += ["-DHIPBLASLT_ENABLE_BLIS=OFF"]
             else:
-                client_opts = ["-DHIPBLASLT_ENABLE_BLIS=ON"]
+                client_opts += ["-DHIPBLASLT_ENABLE_BLIS=ON"]
                 _install_blis(c, bld)
         else:
-            client_opts = ["-DHIPBLASLT_ENABLE_BLIS=OFF"]
+            client_opts += ["-DHIPBLASLT_ENABLE_BLIS=OFF"]
         if not use_system_packages and install_deps:
             # LAPACK superbuild installs into deps_prefix (see _install_system_deps), not /usr/local.
             deps_lib = deps_prefix / "lib"
@@ -845,6 +853,10 @@ def build(
         c.run(cmake_cmd)
         verbose_flag = "" if quiet else " --verbose"
         c.run(f"cmake --build . --target install -j {jobs}{verbose_flag}")
+        # hipblaslt-bench has no install rule, so `--target install` alone won't produce
+        # it; build the client test/bench executables explicitly when clients are enabled.
+        if clients:
+            c.run(f"cmake --build . --target hipblaslt-bench hipblaslt-test -j {jobs}{verbose_flag}")
 
     # ---------------------------------------------------------------------------
     # Package install

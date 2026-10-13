@@ -72,6 +72,7 @@ architectureMap = {
     # shares gfx1250's ISA, so `all` -- built from SUPPORTED_ISA -- cannot name
     # it and it has to be asked for explicitly.
     "gfx1250v0": "gfx1250v0",
+    "gfx11-generic": "gfx11-generic",
 }
 
 gfxVariantMap = {
@@ -129,6 +130,7 @@ SUPPORTED_ISA = [
     IsaVersion(11, 5, 1),
     IsaVersion(11, 5, 2),
     IsaVersion(11, 5, 3),
+    IsaVersion(11, 0, -1),  # gfx11-generic
     IsaVersion(12, 0, 0),
     IsaVersion(12, 0, 1),
     IsaVersion(12, 5, 0),
@@ -192,6 +194,10 @@ def isaToGfx(arch: IsaVersion) -> str:
     Returns:
         The name of the GPU architecture (e.g., 'gfx906').
     """
+    # Generic targets use a negative step (-1) sentinel and a hyphenated name
+    # (gfx11-generic).
+    if arch[2] < 0:
+        return f"gfx{arch[0]}-generic"
     # Convert last digit to hex because reasons
     name = str(arch[0]) + str(arch[1]) + ("%x" % arch[2])
     return "gfx" + "".join(map(str, name))
@@ -259,6 +265,11 @@ def gfxToIsa(name: str) -> Optional[IsaVersion]:
         An object representing the major, minor, and step version of the ISA.
             Returns None if the name does not match the expected pattern.
     """
+    # Generic targets use a negative step (-1) sentinel and a hyphenated name
+    # (gfx11-generic).
+    m = re.search(r"gfx([0-9]+)-generic", name)
+    if m:
+        return IsaVersion(int(m.group(1)), 0, -1)
     match = re.search(r"gfx([0-9a-fA-F]{3,})", name)
     if not match:
         return None

@@ -56,10 +56,7 @@ namespace
             return std::nullopt;
         }
 
-        std::string archName = props.gcnArchName;
-        auto        colonPos = archName.find(':');
-        if(colonPos != std::string::npos)
-            archName = archName.substr(0, colonPos);
+        const std::string archName = rocblaslt_internal_get_generic_arch_name(deviceId);
 
         auto relpath = std::filesystem::path(archName)
                        / ("hipblasltTransform_" + archName + ".hsaco");

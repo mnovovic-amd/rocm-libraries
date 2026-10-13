@@ -138,7 +138,7 @@ def configMarks(filepath, rootDir, availableArchs):
     if arch_val and markNamed(arch_val) not in marks:
         marks.append(markNamed(arch_val))
 
-    arch_in_name = re.search(r'(gfx\d+)', components[-1])
+    arch_in_name = re.search(r'(gfx[0-9a-f]+(?:-\w+)*)', components[-1])
     if arch_in_name and markNamed(arch_in_name.group(1)) not in marks:
         marks.append(markNamed(arch_in_name.group(1)))
 

@@ -55,6 +55,7 @@
 
 #include <hip/hip_runtime_api.h>
 #include <map>
+#include <unordered_map>
 #include <utility>
 
 #define TO_STR2(x) #x
@@ -2677,6 +2678,29 @@ std::string rocblaslt_internal_get_library_arch_name()
     const int asicRevision = -1;
 #endif
     return rocblaslt_revisioned_arch_name(ArchName{}(deviceProperties), asicRevision);
+}
+
+// exported. Map the device's concrete arch to its generic (family-wide) target
+// name, e.g. gfx1152 -> "gfx11-generic". Returns the concrete name unchanged when
+// the chip has no generic family. The chip -> family classification follows LLVM's
+// AMDGPUTargetParser.def.
+std::string rocblaslt_internal_get_generic_arch_name(int deviceId)
+{
+    hipDeviceProp_t deviceProperties;
+    static_cast<void>(hipGetDeviceProperties(&deviceProperties, deviceId));
+    std::string arch_name = ArchName{}(deviceProperties);
+
+    // Chip -> LLVM generic family, per AMDGPUTargetParser.def. Only the families built
+    // here (gfx11-generic) are mapped; chips with no built generic family fall
+    // through to their own name below.
+    static const std::unordered_map<std::string, std::string> arch_map = {
+        {"gfx1100", "gfx11-generic"},   {"gfx1101", "gfx11-generic"},
+        {"gfx1102", "gfx11-generic"},   {"gfx1103", "gfx11-generic"},
+        {"gfx1150", "gfx11-generic"},   {"gfx1151", "gfx11-generic"},
+        {"gfx1152", "gfx11-generic"},   {"gfx1153", "gfx11-generic"},
+    };
+    auto it = arch_map.find(arch_name);
+    return it != arch_map.end() ? it->second : arch_name;
 }
 
 bool rocblaslt_internal_test_path(const std::string& path)

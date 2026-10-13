@@ -23,7 +23,9 @@
 
 # Need to support Release/Debug
 
-string(REGEX MATCHALL "gfx[a-z0-9]+" archs "${GPU_TARGETS}")
+# Match plain targets (gfx1100) as well as the gfx11 generic target.
+string(REGEX MATCHALL "gfx[a-z0-9]+(-[a-z0-9]+)*" archs "${GPU_TARGETS}")
+list(TRANSFORM archs REPLACE "^(gfx1100|gfx1101|gfx1102|gfx1103|gfx1150|gfx1151|gfx1152|gfx1153)$" "gfx11-generic")
 list(REMOVE_DUPLICATES archs)
 
 set(matrix_transform_cpp "${CMAKE_CURRENT_SOURCE_DIR}/matrix_transform.cpp")
@@ -32,7 +34,7 @@ foreach(arch IN LISTS archs)
     tensilelite_offload_target(offload_arch "${arch}")
     set(output_library "${CMAKE_CURRENT_BINARY_DIR}/hipblasltTransform_${arch}.hsaco")
     add_custom_command(
-        COMMAND ${CMAKE_CXX_COMPILER} -x hip ${matrix_transform_cpp} --offload-arch=${offload_arch} -c --offload-device-only -Xoffload-linker --build-id=sha1 -O3 -DNDEBUG -o ${output_library}
+        COMMAND ${CMAKE_CXX_COMPILER} -x hip ${matrix_transform_cpp} --offload-arch=${offload_arch} -mcode-object-version=6 -c --offload-device-only -Xoffload-linker --build-id=sha1 -O3 -DNDEBUG -o ${output_library}
         OUTPUT ${output_library}
         COMMENT "Building hipblasltTransform_${arch}.hsaco"
     )

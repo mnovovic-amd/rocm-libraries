@@ -1270,6 +1270,12 @@ def run():
             newMasterLibrary.applyNaming(splitGSU)
             LibraryIO.write(masterFile, state(newMasterLibrary), arguments["LibraryFormat"])
 
+            mappingFile = archDir / ("TensileLiteLibrary_lazy_" + archName + "_Mapping.dat")
+            if not mappingFile.exists() and not Path(str(mappingFile) + ".zlib").exists():
+                raise RuntimeError(f"Missing generated Tensile mapping for {archName}: {mappingFile}")
+            if mappingFile.exists() and mappingFile.stat().st_size == 0:
+                raise RuntimeError(f"Empty generated Tensile mapping for {archName}: {mappingFile}")
+
             ParallelMap2(writeMsl,
                          newMasterLibrary.lazyLibraries.items(),
                          "Writing master solution libraries",

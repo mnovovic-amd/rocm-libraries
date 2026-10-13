@@ -32,6 +32,12 @@ endif()
 # only prunes which. GPU_TARGETS is untouched (it also feeds extops/transform/
 # validation on the base name); only the bare gfx1250 reaches here.
 set(_main_arches ${GPU_TARGETS})
+# The gfx11 generic library replaces the per-chip logic trees for all supported
+# gfx11 targets. Keep non-gfx11 targets unchanged.
+set(_gfx11_concrete_targets
+    gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx1153)
+list(TRANSFORM _main_arches REPLACE "^(gfx1100|gfx1101|gfx1102|gfx1103|gfx1150|gfx1151|gfx1152|gfx1153)$" "gfx11-generic")
+list(REMOVE_DUPLICATES _main_arches)
 set(_build_gfx1250v0 OFF)
 if("gfx1250" IN_LIST GPU_TARGETS)
     if(HIPBLASLT_ASIC_REVISION STREQUAL "v0")
@@ -48,6 +54,12 @@ elseif(HIPBLASLT_ASIC_REVISION STREQUAL "v0")
                     "(${GPU_TARGETS}); nothing in this build is for the v0 revision.")
 endif()
 
+set(_logic_filter "${TENSILELITE_LOGIC_FILTER}")
+if("gfx11-generic" IN_LIST _main_arches AND _logic_filter STREQUAL "gfx11-generic")
+    # Logic files carry the architecture in a longer filename suffix.
+    set(_logic_filter "*gfx11-generic*")
+endif()
+
 hipblaslt_create_device_library(
     TARGET tensilelite-device-libraries
     LOGIC_PATH "${HIPBLASLT_LIBLOGIC_PATH}"
@@ -56,7 +68,7 @@ hipblaslt_create_device_library(
     CXX_COMPILER "${CMAKE_CXX_COMPILER}"
     OFFLOAD_BUNDLER "${TENSILELITE_OFFLOADBUNDLER}"
     JOBS "${TENSILELITE_BUILD_PARALLEL_LEVEL}"
-    LOGIC_FILTER "${TENSILELITE_LOGIC_FILTER}"
+    LOGIC_FILTER "${_logic_filter}"
     ASAN "${HIPBLASLT_ENABLE_ASAN}"
     YAML_FORMAT "${HIPBLASLT_ENABLE_YAML}"
     NO_COMPRESS "${TENSILELITE_NO_COMPRESS}"
