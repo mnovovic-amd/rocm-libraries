@@ -35,8 +35,8 @@ set(_main_arches ${GPU_TARGETS})
 # The gfx11 generic library replaces the per-chip logic trees for all supported
 # gfx11 targets. Keep non-gfx11 targets unchanged.
 set(_gfx11_concrete_targets
-    gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx1153)
-list(TRANSFORM _main_arches REPLACE "^(gfx1100|gfx1101|gfx1102|gfx1103|gfx1150|gfx1151|gfx1152|gfx1153)$" "gfx11-generic")
+    gfx1101 gfx1102 gfx1103 gfx1150 gfx1152 gfx1153)
+list(TRANSFORM _main_arches REPLACE "^(gfx1101|gfx1102|gfx1103|gfx1150|gfx1152|gfx1153)$" "gfx11-generic")
 list(REMOVE_DUPLICATES _main_arches)
 set(_build_gfx1250v0 OFF)
 if("gfx1250" IN_LIST GPU_TARGETS)

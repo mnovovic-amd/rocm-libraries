@@ -2694,9 +2694,8 @@ std::string rocblaslt_internal_get_generic_arch_name(int deviceId)
     // here (gfx11-generic) are mapped; chips with no built generic family fall
     // through to their own name below.
     static const std::unordered_map<std::string, std::string> arch_map = {
-        {"gfx1100", "gfx11-generic"},   {"gfx1101", "gfx11-generic"},
-        {"gfx1102", "gfx11-generic"},   {"gfx1103", "gfx11-generic"},
-        {"gfx1150", "gfx11-generic"},   {"gfx1151", "gfx11-generic"},
+        {"gfx1101", "gfx11-generic"},   {"gfx1102", "gfx11-generic"},
+        {"gfx1103", "gfx11-generic"},   {"gfx1150", "gfx11-generic"},
         {"gfx1152", "gfx11-generic"},   {"gfx1153", "gfx11-generic"},
     };
     auto it = arch_map.find(arch_name);

@@ -5,7 +5,7 @@ set(ops_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../tensilelite")
 set(output_dir "${CMAKE_CURRENT_BINARY_DIR}")
 # Keep auxiliary libraries aligned with the generic GEMM library.
 string(REGEX MATCHALL "gfx[a-z0-9]+(-[a-z0-9]+)*" archs "${GPU_TARGETS}")
-list(TRANSFORM archs REPLACE "^(gfx1100|gfx1101|gfx1102|gfx1103|gfx1150|gfx1151|gfx1152|gfx1153)$" "gfx11-generic")
+list(TRANSFORM archs REPLACE "^(gfx1101|gfx1102|gfx1103|gfx1150|gfx1152|gfx1153)$" "gfx11-generic")
 list(REMOVE_DUPLICATES archs)
 message(STATUS "Architectures to process: ${archs}")
 

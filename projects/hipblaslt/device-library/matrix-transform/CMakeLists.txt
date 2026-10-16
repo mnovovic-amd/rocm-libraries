@@ -25,7 +25,7 @@
 
 # Match plain targets (gfx1100) as well as the gfx11 generic target.
 string(REGEX MATCHALL "gfx[a-z0-9]+(-[a-z0-9]+)*" archs "${GPU_TARGETS}")
-list(TRANSFORM archs REPLACE "^(gfx1100|gfx1101|gfx1102|gfx1103|gfx1150|gfx1151|gfx1152|gfx1153)$" "gfx11-generic")
+list(TRANSFORM archs REPLACE "^(gfx1101|gfx1102|gfx1103|gfx1150|gfx1152|gfx1153)$" "gfx11-generic")
 list(REMOVE_DUPLICATES archs)
 
 set(matrix_transform_cpp "${CMAKE_CURRENT_SOURCE_DIR}/matrix_transform.cpp")

@@ -105,9 +105,8 @@ namespace TensileLite
             // Keep in sync with rocblaslt_auxiliary.cpp arch_map. Only gfx11
             // concrete chips are mapped to the family library here.
             static const std::unordered_map<std::string, std::string> m = {
-                {"gfx1100", "gfx11-generic"},   {"gfx1101", "gfx11-generic"},
-                {"gfx1102", "gfx11-generic"},   {"gfx1103", "gfx11-generic"},
-                {"gfx1150", "gfx11-generic"},   {"gfx1151", "gfx11-generic"},
+                {"gfx1101", "gfx11-generic"},   {"gfx1102", "gfx11-generic"},
+                {"gfx1103", "gfx11-generic"},   {"gfx1150", "gfx11-generic"},
                 {"gfx1152", "gfx11-generic"},   {"gfx1153", "gfx11-generic"},
             };
             auto it = m.find(arch);
